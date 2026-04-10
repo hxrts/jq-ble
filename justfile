@@ -137,8 +137,8 @@ ci-dry-run:
 
     add_step "Preflight"               "./scripts/preflight.sh"
     add_step "Format Check"            "{{fmt_cmd}} --all -- --check"
-    add_step "Clippy"                  "cargo clippy --workspace --all-targets -- -D warnings"
-    add_step "Tests"                   "cargo test --workspace"
+    add_step "Clippy"                  "nix develop --command cargo clippy --workspace --all-targets -- -D warnings"
+    add_step "Tests"                   "nix develop --command cargo test --workspace"
     add_step "Docs Link Check"         "{{toolkit_cmd}} check docs-link-check --repo-root . --config policy/toolkit.toml"
     add_step "Docs Semantic Drift"     "{{toolkit_cmd}} check docs-semantic-drift --repo-root . --config policy/toolkit.toml"
     add_step "Proc Macro Scope"        "{{toolkit_cmd}} check proc-macro-scope --repo-root . --config policy/toolkit.toml"

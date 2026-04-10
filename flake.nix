@@ -58,6 +58,9 @@
           [
             openssl
           ]
+          ++ lib.optionals stdenv.isLinux [
+            dbus
+          ]
           ++ lib.optionals stdenv.isDarwin [
             libiconv
           ];
