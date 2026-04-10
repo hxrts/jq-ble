@@ -47,6 +47,10 @@ If you need to inspect or change BLE substrate behavior, look there first.
 - `cargo clippy --workspace`
 - `cargo fmt --all`
 
+## Policy
+
+Repo-specific lint and enforcement configuration lives in `policy/toolkit.toml`. Generic rules belong in the shared toolkit (flake input); `jq-ble`-specific rules go here.
+
 ## Editing Expectations
 
 - Keep changes scoped to the Jacquard adapter crates in this repo.
