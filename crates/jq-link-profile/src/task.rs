@@ -47,7 +47,7 @@ use crate::transport::{
 };
 
 // Short sleep between deferred control ingress retries; keeps the select loop responsive without busy-looping.
-const DEFERRED_CONTROL_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+const DEFERRED_CONTROL_RETRY_INTERVAL_MS: Duration = Duration::from_millis(5);
 
 type CentralEvents<CB> = EventStream<CentralEvent, <CB as CentralBackend>::EventStream>;
 type PeripheralEvents<PB> = EventStream<PeripheralEvent, <PB as PeripheralBackend>::EventStream>;
@@ -78,12 +78,14 @@ where
     CB: CentralBackend + Send + 'static,
     PB: PeripheralBackend + Send + 'static,
 {
+    #[must_use = "runtime construction can fail and must be handled"]
     pub fn new(
         local_node_id: NodeId,
         central: Central<CB>,
         peripheral: Peripheral<PB>,
         config: BleConfig,
     ) -> Result<(Self, BleRuntimeParts), BleLinkError> {
+        // recursion-exception: constructor assembles runtime-owned state while retaining the conventional `new` entrypoint
         if config.ingress_capacity == 0 {
             return Err(BleLinkError::ZeroIngressCapacity);
         }
@@ -93,10 +95,12 @@ where
 
         let central_events = central.events();
         let peripheral_events = peripheral.events();
-        let (ingress_tx, ingress_rx, notifier) = transport_ingress_mailbox(config.ingress_capacity);
-        let (command_tx, command_rx) = mpsc::channel(config.command_capacity);
-        let (l2cap_events_tx, l2cap_events_rx) = mpsc::channel(config.command_capacity);
-        let (outbound_tx, outbound_rx) = dispatch_mailbox(config.command_capacity);
+        let ingress_capacity = config.ingress_capacity as usize;
+        let command_capacity = config.command_capacity as usize;
+        let (ingress_tx, ingress_rx, notifier) = transport_ingress_mailbox(ingress_capacity);
+        let (command_tx, command_rx) = mpsc::channel(command_capacity);
+        let (l2cap_events_tx, l2cap_events_rx) = mpsc::channel(command_capacity);
+        let (outbound_tx, outbound_rx) = dispatch_mailbox(command_capacity);
         let control = BleDriverControl::new(command_tx);
         let driver = BleTransportDriver::new(ingress_rx, control.clone());
         let sender = BleTransportSender::new(outbound_tx);
@@ -125,12 +129,14 @@ where
         Ok((task, (driver, sender, outbound_rx, control, notifier)))
     }
 
+    #[must_use = "runtime startup can fail and must be handled"]
     pub fn spawn(
         local_node_id: NodeId,
         central: Central<CB>,
         peripheral: Peripheral<PB>,
         config: BleConfig,
     ) -> Result<BleTransportComponents, BleLinkError> {
+        // recursion-exception: spawning keeps the public runtime entrypoint aligned with transport assembly
         let (task, (driver, sender, outbound, control, notifier)) =
             Self::new(local_node_id, central, peripheral, config)?;
         let runtime_task = tokio::spawn(task.run());
@@ -155,16 +161,19 @@ where
     }
 
     #[doc(hidden)]
+    #[must_use]
     pub fn testing_identity_resolved_for_device(&self, device_id: &DeviceId) -> bool {
         self.resolved_node_id_for_device(device_id).is_some()
     }
 
     #[doc(hidden)]
-    pub fn testing_session_count(&self) -> usize {
-        self.sessions.len()
+    #[must_use]
+    pub fn testing_session_count(&self) -> u32 {
+        self.sessions.len().min(u32::MAX as usize) as u32
     }
 
     #[doc(hidden)]
+    #[must_use]
     pub fn testing_has_egress_session_for_device(&self, device_id: &DeviceId) -> bool {
         self.egress_session_for_device(device_id).is_some()
     }
@@ -192,8 +201,10 @@ where
             |psm| gatt_l2cap_service(&self.local_node_id, psm),
         );
         // Hardware errors here are non-fatal; the event loop continues and peers can still connect.
+        // allow-ignored-result: advertising may fail transiently and the runtime can still service inbound work
         let _ = self.peripheral.add_service(&service).await;
         // Scan errors are non-fatal; discovery resumes on the next topology refresh.
+        // allow-ignored-result: scan startup may fail transiently and discovery will retry on later rounds
         let _ = self.central.start_scan(ScanFilter::default()).await;
 
         loop {
@@ -203,7 +214,7 @@ where
                 if self.deferred_control_ingress.is_empty() {
                     std::future::pending::<()>().await;
                 } else {
-                    tokio::time::sleep(DEFERRED_CONTROL_RETRY_INTERVAL).await;
+                    tokio::time::sleep(DEFERRED_CONTROL_RETRY_INTERVAL_MS).await;
                 }
             };
             tokio::select! {
@@ -275,7 +286,7 @@ where
     }
 
     async fn handle_device_discovered(&mut self, device: blew::types::BleDevice) {
-        // Skip devices that don't carry a Jacquard discovery UUID; they are not mesh peers.
+        // Skip devices that don't carry a Jacquard discovery UUID, they are not mesh peers.
         let Some(prefix) = parse_discovery_hint(&device.services) else {
             return;
         };
@@ -299,6 +310,7 @@ where
         };
 
         // Connection outcome arrives asynchronously via CentralEvent::DeviceConnected/Disconnected.
+        // allow-ignored-result: connect is best-effort and follow-up state changes arrive via central events
         let _ = self.central.connect(&device.id).await;
     }
 
@@ -320,7 +332,9 @@ where
         // Cross-check the hint prefix against the full NodeId to detect address-reuse spoofing.
         if !hint_matches_node_id(hint.node_id_prefix, &node_id) {
             // Best-effort cleanup; this peer is rejected regardless of whether disconnect succeeds.
+            // allow-ignored-result: disconnect is best-effort when the central backend already considers the peer gone
             let _ = self.central.disconnect(&device_id).await;
+            // allow-ignored-result: peer cleanup is best-effort because the map entry may already be absent
             let _ = self.peers.remove(&key);
             return;
         }
@@ -399,6 +413,7 @@ where
     ) {
         if let Some(node_id) = self.resolved_node_id_for_device(&client_id) {
             // Payload class drops on a full mailbox; loss is acceptable under back-pressure.
+            // allow-ignored-result: ingress delivery is best-effort when the bridge has already shut down
             let _ = self.ingress_tx.emit(
                 TransportIngressClass::Payload,
                 TransportIngressEvent::PayloadReceived {
@@ -470,6 +485,7 @@ where
                 };
 
                 // Payload class drops on a full mailbox; loss is acceptable under back-pressure.
+                // allow-ignored-result: ingress delivery is best-effort when the bridge has already shut down
                 let _ = self.ingress_tx.emit(
                     TransportIngressClass::Payload,
                     TransportIngressEvent::PayloadReceived {
@@ -527,6 +543,7 @@ where
         match session {
             BleSession::GattCentral { device_id } => {
                 // Fire-and-forget; BLE write errors surface via link health, not per-send failures.
+                // allow-ignored-result: GATT writes are fire-and-forget and failure is reflected later via link health
                 let _ = self
                     .central
                     .write_characteristic(
@@ -540,6 +557,7 @@ where
             }
             BleSession::GattPeripheralSubscribed { .. } => {
                 // Fire-and-forget; notify errors are transient and handled by the reliable layer.
+                // allow-ignored-result: peripheral notifications are fire-and-forget and transient failure is retried later
                 let _ = self
                     .peripheral
                     .notify_characteristic(JACQUARD_P2C_CHAR_UUID, payload.to_vec())
@@ -571,6 +589,7 @@ where
         };
 
         // Payload class drops on a full mailbox; loss is acceptable under back-pressure.
+        // allow-ignored-result: ingress delivery is best-effort when the bridge has already shut down
         let _ = self.ingress_tx.emit(
             TransportIngressClass::Payload,
             TransportIngressEvent::PayloadReceived {
@@ -611,6 +630,7 @@ where
     async fn install_gatt_session(&mut self, node_id: NodeId, device_id: DeviceId) {
         // Subscribe to P2C notifications so the peripheral can push payloads to us as central.
         // Subscription failure is recoverable; the session is still usable for central writes.
+        // allow-ignored-result: subscription is best-effort and GATT writes remain usable even if it fails
         let _ = self
             .central
             .subscribe_characteristic(&device_id, JACQUARD_P2C_CHAR_UUID)

@@ -62,6 +62,7 @@ struct TestRouter {
 
 impl TestRouter {
     fn new(next_hint: RoutingTickHint, change: RoutingTickChange) -> Self {
+        // recursion-exception: constructor assembles the test router while retaining the conventional `new` entrypoint
         Self {
             ingested: Arc::new(Mutex::new(Vec::new())),
             outbound_queue: None,
@@ -124,6 +125,7 @@ struct FakeTransport {
 
 impl FakeTransport {
     fn new() -> Self {
+        // recursion-exception: constructor assembles the fake transport while retaining the conventional `new` entrypoint
         let (ingress_sender, ingress_receiver, notifier) = transport_ingress_mailbox(16);
         let (pending_outbound_tx, pending_outbound_rx) = dispatch_mailbox(16);
         Self {

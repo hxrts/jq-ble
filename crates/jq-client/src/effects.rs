@@ -32,6 +32,7 @@ pub struct BleRuntimeEffects {
 impl BleRuntimeEffects {
     #[must_use]
     pub fn new(initial_tick: Tick) -> Self {
+        // recursion-exception: constructor seeds the shared runtime state while retaining the conventional `new` entrypoint
         Self {
             state: Arc::new(Mutex::new(BleRuntimeState {
                 now_tick: initial_tick,

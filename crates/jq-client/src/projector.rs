@@ -31,7 +31,9 @@ pub(crate) struct TopologyProjector {
 }
 
 impl TopologyProjector {
+    #[must_use]
     pub(crate) fn new(local_node_id: NodeId, initial_topology: Observation<Configuration>) -> Self {
+        // recursion-exception: constructor builds the derived snapshot while keeping the conventional `new` entrypoint
         let edge_observations = initial_topology
             .value
             .links
@@ -59,39 +61,49 @@ impl TopologyProjector {
         }
     }
 
+    #[must_use]
     pub(crate) fn snapshot(&self) -> MeshTopology {
         self.snapshot.clone()
     }
 
+    #[must_use]
     pub(crate) fn topology_observation(&self) -> Observation<Configuration> {
         self.topology.clone()
     }
 
+    #[must_use]
     pub(crate) fn ingest_engine_capabilities(
         &mut self,
         capabilities: RoutingEngineCapabilities,
     ) -> bool {
+        // recursion-exception: same-name delegation keeps projector updates aligned with the adapter projector surface
         self.generic.ingest_engine_capabilities(capabilities);
         self.refresh_snapshot()
     }
 
+    #[must_use]
     pub(crate) fn ingest_materialized_route(
         &mut self,
         route: &jacquard_core::MaterializedRoute,
     ) -> bool {
+        // recursion-exception: same-name delegation keeps projector updates aligned with the adapter projector surface
         self.generic.ingest_materialized_route(route);
         self.refresh_snapshot()
     }
 
+    #[must_use]
     pub(crate) fn ingest_round_outcome(&mut self, outcome: &RouterRoundOutcome) -> bool {
+        // recursion-exception: same-name delegation keeps projector updates aligned with the adapter projector surface
         self.generic.ingest_round_outcome(outcome);
         self.refresh_snapshot()
     }
 
+    #[must_use]
     pub(crate) fn ingest_transport_observation(
         &mut self,
         observation: &TransportObservation,
     ) -> bool {
+        // recursion-exception: same-name delegation keeps projector updates aligned with the adapter projector surface
         let changed = match observation {
             // A received payload confirms the peer is still reachable so we advance the topology clock.
             TransportObservation::PayloadReceived {
@@ -311,6 +323,7 @@ fn route_shape_visibility(route_shape: ObservedRouteShape) -> RouteShapeVisibili
     }
 }
 
+#[must_use]
 pub(crate) fn derive_route_delivery(
     topology: &MeshTopology,
     owner_node_id: NodeId,
@@ -335,6 +348,7 @@ pub(crate) fn derive_route_delivery(
     })
 }
 
+#[must_use]
 pub(crate) fn path_transport_mix(
     topology: &MeshTopology,
     delivery: &ActiveRouteDelivery,

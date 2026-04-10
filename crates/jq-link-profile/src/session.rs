@@ -27,10 +27,12 @@ fn iter_session_slots(sessions: &PeerSessions) -> impl Iterator<Item = &BleSessi
     .flatten()
 }
 
+#[must_use]
 pub(crate) fn session_references_device(sessions: &PeerSessions, device_id: &DeviceId) -> bool {
     iter_session_slots(sessions).any(|session| session_device_id(session) == device_id)
 }
 
+#[must_use]
 pub(crate) fn session_device_id(session: &BleSession) -> &DeviceId {
     match session {
         BleSession::GattCentral { device_id }
@@ -71,6 +73,7 @@ pub(crate) async fn resolve_remote_psm<CB: CentralBackend>(
     parse_psm_value(&psm_bytes)
 }
 
+#[must_use]
 pub(crate) fn device_id_from_endpoint(endpoint: &LinkEndpoint) -> Option<DeviceId> {
     // Reverses ble_locator(): recovers the DeviceId address string from the "ble"-scoped locator bytes.
     match &endpoint.locator {
@@ -81,6 +84,7 @@ pub(crate) fn device_id_from_endpoint(endpoint: &LinkEndpoint) -> Option<DeviceI
     }
 }
 
+#[must_use]
 pub(crate) fn first_gatt_fallback(sessions: &PeerSessions) -> Option<BleSession> {
     // Intentionally egress-first: when downgrading from L2CAP we want the best outbound GATT
     // session, not the canonical ingress-preferred order used by iter_session_slots.
@@ -95,6 +99,7 @@ pub(crate) fn first_gatt_fallback(sessions: &PeerSessions) -> Option<BleSession>
     .cloned()
 }
 
+#[must_use]
 pub(crate) fn endpoint_for_session(session: &BleSession) -> LinkEndpoint {
     match session {
         BleSession::GattCentral { device_id }

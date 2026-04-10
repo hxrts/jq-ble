@@ -8,9 +8,10 @@ use jacquard_core::{
     RouteId, RouteShapeVisibility, RoutingEngineId, RoutingEvidenceClass, Tick, TransportKind,
 };
 use jacquard_reference_client::topology as reference_topology;
-use jq_node_profile::{active_route, topology, MeshEdge, MeshNode, MeshTopologyBuildError};
+use jq_node_profile::{MeshEdge, MeshNode, MeshTopologyBuildError, active_route, topology};
 
 fn node(byte: u8) -> jacquard_core::Node {
+    // recursion-exception: helper keeps the short `node` name while delegating to the reference topology builder
     reference_topology::node(byte).pathway().build()
 }
 

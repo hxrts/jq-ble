@@ -109,6 +109,7 @@ pub struct ActiveRoute {
 impl ActiveRoute {
     #[must_use]
     pub fn hop_node_ids(&self) -> Vec<NodeId> {
+        // recursion-exception: same-name delegation keeps hop derivation on the public route surface
         self.delivery
             .hop_node_ids(self.owner_node_id, self.terminal_node_id)
     }

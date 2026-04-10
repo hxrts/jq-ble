@@ -7,19 +7,19 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use jacquard_adapter::{dispatch_mailbox, TransportIngressClass};
+use jacquard_adapter::{TransportIngressClass, dispatch_mailbox};
 use jacquard_core::{
     LinkBuilder, LinkEndpoint, LinkRuntimeState, NodeId, PartitionRecoveryClass, RepairCapability,
     TransportIngressEvent, TransportKind,
 };
 use jq_client::{
-    decode_client_payload_for_testing, encode_client_payload_for_testing, JacquardBleClient,
+    JacquardBleClient, decode_client_payload_for_testing, encode_client_payload_for_testing,
 };
 use tokio::task::LocalSet;
 use tokio_stream::StreamExt;
 
 use common::{
-    ble_endpoint, local_only_topology, published_topology, FakeTransport, TestTransportSender,
+    FakeTransport, TestTransportSender, ble_endpoint, local_only_topology, published_topology,
 };
 
 fn payload_received(
@@ -81,17 +81,19 @@ async fn send_flushes_a_payload_through_the_client_boundary() {
             );
 
             let flushed = flushed.lock().expect("flushed frames");
-            assert!(flushed
-                .iter()
-                .filter_map(|frame| decode_client_payload_for_testing(&frame.payload))
-                .any(|payload| payload == b"hello over jacquard ble"));
+            assert!(
+                flushed
+                    .iter()
+                    .filter_map(|frame| decode_client_payload_for_testing(&frame.payload))
+                    .any(|payload| payload == b"hello over jacquard ble")
+            );
         })
         .await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn user_payloads_starting_with_jqbatman_are_delivered_while_unframed_control_bytes_stay_hidden(
-) {
+async fn user_payloads_starting_with_jqbatman_are_delivered_while_unframed_control_bytes_stay_hidden()
+ {
     LocalSet::new()
         .run_until(async {
             let local_node_id = NodeId([1; 32]);
@@ -161,12 +163,13 @@ async fn notifier_wakes_the_client_without_waiting_for_the_full_tick_interval() 
             };
             let transport = FakeTransport::new(outbound_rx);
             let ingress_sender = transport.ingress_sender.clone();
-            let client = JacquardBleClient::new_with_transport_and_round_interval_for_testing(
+            let bridge_round_interval_ms = Duration::from_millis(250);
+            let client = JacquardBleClient::new_with_transport_and_round_interval_ms_for_testing(
                 local_node_id,
                 local_only_topology(local_node_id),
                 transport,
                 transport_sender,
-                Duration::from_millis(250),
+                bridge_round_interval_ms,
             );
 
             let mut topology_stream = Box::pin(client.topology_stream());

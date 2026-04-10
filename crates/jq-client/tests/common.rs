@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use jacquard_adapter::{
-    transport_ingress_mailbox, DispatchReceiver, DispatchSender, TransportIngressNotifier,
+    DispatchReceiver, DispatchSender, TransportIngressNotifier, transport_ingress_mailbox,
 };
 use jacquard_core::{
     ByteCount, Configuration, EndpointLocator, Environment, FactSourceClass, LinkEndpoint, NodeId,
@@ -19,7 +19,7 @@ use jacquard_core::{
     TransportError, TransportIngressEvent, TransportKind,
 };
 use jacquard_reference_client::topology;
-use jacquard_traits::{effect_handler, TransportSenderEffects};
+use jacquard_traits::{TransportSenderEffects, effect_handler};
 use jq_client::BleBridgeIo;
 
 const MAILBOX_CAPACITY: usize = 64;
@@ -63,7 +63,9 @@ pub struct FakeTransport {
 }
 
 impl FakeTransport {
+    #[must_use]
     pub fn new(outbound: DispatchReceiver<OutboundFrame>) -> Self {
+        // recursion-exception: constructor assembles the fake transport while retaining the conventional `new` entrypoint
         let (ingress_sender, ingress_receiver, notifier) =
             transport_ingress_mailbox(MAILBOX_CAPACITY);
         Self {
@@ -105,6 +107,7 @@ impl BleBridgeIo for FakeTransport {
 
 /// Constructs a BLE `LinkEndpoint` with a single-byte `ScopedBytes` locator.
 /// `byte` uniquely identifies the remote peer within a test.
+#[must_use]
 pub fn ble_endpoint(byte: u8, transport_kind: TransportKind) -> LinkEndpoint {
     LinkEndpoint::new(
         transport_kind,
@@ -124,6 +127,7 @@ pub fn ble_endpoint(byte: u8, transport_kind: TransportKind) -> LinkEndpoint {
 
 /// Two-node topology (local=1, remote=2) with one active link; suitable for
 /// send-path and route-activation tests.
+#[must_use]
 pub fn published_topology() -> Observation<Configuration> {
     Observation {
         value: Configuration {
@@ -159,6 +163,7 @@ pub fn published_topology() -> Observation<Configuration> {
 
 /// Single-node topology containing only the local node; suitable for tests
 /// that inject link observations to drive topology discovery.
+#[must_use]
 pub fn local_only_topology(local_node_id: NodeId) -> Observation<Configuration> {
     Observation {
         value: Configuration {

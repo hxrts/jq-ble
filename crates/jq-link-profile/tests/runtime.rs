@@ -31,7 +31,7 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 const WAIT_MAX_RETRIES: usize = 40;
-const WAIT_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+const WAIT_RETRY_INTERVAL_MS: Duration = Duration::from_millis(10);
 
 fn endpoint(byte: u8) -> LinkEndpoint {
     LinkEndpoint::new(
@@ -114,7 +114,7 @@ async fn wait_for_ingress(
         if ingress.len() >= minimum_events {
             return ingress;
         }
-        sleep(WAIT_RETRY_INTERVAL).await;
+        sleep(WAIT_RETRY_INTERVAL_MS).await;
     }
 
     panic!("timed out waiting for ingress events");
@@ -253,6 +253,7 @@ async fn sender_queue_does_not_perform_ble_io_until_control_dispatch() {
     .expect("spawn runtime");
     let (mut driver, mut sender, mut outbound, control, _notifier, runtime_task) =
         components.into_parts();
+    // allow-ignored-result: this wait only ensures ingress drained before the subsequent assertion path
     let _ = wait_for_ingress(&mut driver, 1).await;
 
     let mut remote_events = remote_peripheral.events();

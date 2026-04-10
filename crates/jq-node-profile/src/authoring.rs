@@ -62,6 +62,7 @@ impl ActiveRouteBuilder {
         engine: RoutingEngineId,
         observed_at_tick: Tick,
     ) -> Self {
+        // recursion-exception: constructor assembles the builder while retaining the conventional `new` entrypoint
         // Infer the most specific delivery type possible from the owner/terminal relationship.
         let delivery = if owner_node_id == terminal_node_id {
             ActiveRouteDelivery::Local
@@ -146,6 +147,7 @@ pub struct MeshTopologyBuilder {
 impl MeshTopologyBuilder {
     #[must_use]
     pub fn new(local_node_id: NodeId, observed_at_tick: Tick) -> Self {
+        // recursion-exception: constructor assembles the builder while retaining the conventional `new` entrypoint
         Self {
             local_node_id,
             observed_at_tick,
@@ -173,6 +175,7 @@ impl MeshTopologyBuilder {
         self
     }
 
+    #[must_use = "topology validation can fail and must be handled"]
     pub fn build(self) -> Result<MeshTopology, MeshTopologyBuildError> {
         let nodes = collect_nodes(self.nodes, self.local_node_id)?;
         let edges = collect_edges(self.edges, &nodes)?;

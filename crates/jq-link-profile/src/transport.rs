@@ -19,8 +19,8 @@ use tokio::task::JoinHandle;
 
 use crate::task::BleRuntimeTask;
 
-pub(crate) const DEFAULT_INGRESS_CAPACITY: usize = 1024;
-pub(crate) const DEFAULT_COMMAND_CAPACITY: usize = 64;
+pub(crate) const DEFAULT_INGRESS_CAPACITY: u32 = 1024;
+pub(crate) const DEFAULT_COMMAND_CAPACITY: u32 = 64;
 
 pub(crate) type BleRuntimeParts = (
     BleTransportDriver,
@@ -32,8 +32,8 @@ pub(crate) type BleRuntimeParts = (
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BleConfig {
-    pub ingress_capacity: usize,
-    pub command_capacity: usize,
+    pub ingress_capacity: u32,
+    pub command_capacity: u32,
 }
 
 impl Default for BleConfig {
@@ -121,6 +121,7 @@ pub struct BleTransportSender {
 }
 
 impl BleTransportSender {
+    #[must_use]
     pub(crate) fn new(outbound: DispatchSender<BleOutboundCommand>) -> Self {
         Self { outbound }
     }
@@ -150,6 +151,7 @@ pub struct BleDriverControl {
 }
 
 impl BleDriverControl {
+    #[must_use]
     pub(crate) fn new(tx: mpsc::Sender<BleDriverCommand>) -> Self {
         Self { tx }
     }
@@ -175,6 +177,7 @@ pub struct BleTransportDriver {
 }
 
 impl BleTransportDriver {
+    #[must_use]
     pub(crate) fn new(ingress: TransportIngressReceiver, control: BleDriverControl) -> Self {
         Self { ingress, control }
     }
@@ -208,6 +211,7 @@ pub struct BleTransportComponents {
 
 impl BleTransportComponents {
     pub async fn new(local_node_id: NodeId, config: BleConfig) -> Result<Self, BleLinkError> {
+        // recursion-exception: constructor performs backend setup while retaining the conventional `new` entrypoint
         let central: Central = Central::new().await?;
         let peripheral: Peripheral = Peripheral::new().await?;
         BleRuntimeTask::spawn(local_node_id, central, peripheral, config)

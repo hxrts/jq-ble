@@ -14,9 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use jacquard_adapter::opaque_endpoint;
-use jacquard_batman::{BatmanEngine, BATMAN_ENGINE_ID};
+use jacquard_batman::{BATMAN_ENGINE_ID, BatmanEngine};
 use jacquard_core::{
     ByteCount, Configuration, ConnectivityPosture, ControllerId, DestinationId, DurationMs,
     Environment, FactSourceClass, HealthScore, HoldFallbackPolicy, IdentityAssuranceClass, Limit,
@@ -27,15 +27,15 @@ use jacquard_core::{
 };
 use jacquard_mem_link_profile::InMemoryRetentionStore;
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
-use jacquard_pathway::{DeterministicPathwayTopologyModel, PathwayEngine, PATHWAY_ENGINE_ID};
+use jacquard_pathway::{DeterministicPathwayTopologyModel, PATHWAY_ENGINE_ID, PathwayEngine};
 use jacquard_router::{FixedPolicyEngine, MultiEngineRouter};
 use jacquard_traits::{Blake3Hashing, Router, RoutingDataPlane, TransportSenderEffects};
 use jq_link_profile::{BleConfig, BleLinkError, BleTransportComponents};
 use jq_node_profile::MeshTopology;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::Stream;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::projector::TopologyProjector;
 use crate::{
@@ -44,7 +44,7 @@ use crate::{
 };
 
 const DEFAULT_CLIENT_COMMAND_CAPACITY: usize = 64;
-const DEFAULT_CLIENT_TICK_DURATION: Duration = Duration::from_millis(25);
+const DEFAULT_CLIENT_TICK_DURATION_MS: Duration = Duration::from_millis(25);
 const CLIENT_PAYLOAD_MAGIC: &[u8; 8] = b"JQCLIENT";
 
 pub type JacquardBleRouter = MultiEngineRouter<FixedPolicyEngine, BleRuntimeEffects>;
@@ -93,7 +93,7 @@ struct ClientTask<Transport> {
     topology_updates: broadcast::Sender<MeshTopology>,
     projector: TopologyProjector,
     route_cache: BTreeMap<NodeId, jacquard_core::RouteId>,
-    tick_duration: Duration,
+    tick_duration_ms: Duration,
     shutdown: watch::Receiver<bool>,
 }
 
@@ -141,6 +141,7 @@ where
             ClientCommand::Send { to, payload, reply } => {
                 let result = self.handle_send(to, payload).await;
                 // Caller may have been dropped (fire-and-forget); a closed oneshot is not an error.
+                // allow-ignored-result: reply delivery is best-effort when the caller dropped the oneshot receiver
                 let _ = reply.send(result);
             }
         }
@@ -259,6 +260,7 @@ where
                     continue;
                 };
                 // Broadcast drops when no subscribers are active; that is not an error.
+                // allow-ignored-result: incoming fanout is best-effort when no subscriber is attached
                 let _ = self
                     .incoming
                     .send((*from_node_id, Bytes::copy_from_slice(payload)));
@@ -270,6 +272,7 @@ where
         let snapshot = self.projector.snapshot();
         *self.topology.lock().expect("topology state lock") = snapshot.clone();
         // Broadcast drops when no subscribers are active; that is not an error.
+        // allow-ignored-result: topology fanout is best-effort when no subscriber is attached
         let _ = self.topology_updates.send(snapshot);
     }
 
@@ -286,7 +289,7 @@ where
     }
 
     async fn wait_for_tick_or_work(&mut self, ticks: Tick) -> bool {
-        let sleep = tokio::time::sleep(duration_for_tick_hint(self.tick_duration, ticks));
+        let sleep = tokio::time::sleep(duration_for_tick_hint(self.tick_duration_ms, ticks));
         let notifier = self.bridge.notifier().clone();
         let snapshot = notifier.snapshot();
         tokio::pin!(sleep);
@@ -315,9 +318,9 @@ where
     async fn wait_after_bridge_error(&mut self) -> bool {
         let notifier = self.bridge.notifier().clone();
         let snapshot = notifier.snapshot();
-        let timeout = duration_ms(self.tick_duration);
+        let timeout_ms = duration_ms(self.tick_duration_ms);
         let notifier_wait = tokio::task::spawn_blocking(move || {
-            notifier.wait_for_change_timeout(snapshot, timeout)
+            notifier.wait_for_change_timeout(snapshot, timeout_ms)
         });
         tokio::select! {
             biased;
@@ -348,6 +351,7 @@ pub struct JacquardBleClient {
 
 impl JacquardBleClient {
     pub async fn new(local_node_id: NodeId) -> Result<Self, BleClientError> {
+        // recursion-exception: constructor delegates to transport assembly with the same semantic name
         let components = BleTransportComponents::new(local_node_id, BleConfig::default()).await?;
         let (driver, sender, outbound, control, notifier, runtime_task) = components.into_parts();
         let transport =
@@ -357,7 +361,7 @@ impl JacquardBleClient {
             initial_topology(local_node_id, Tick(1)),
             transport,
             sender,
-            DEFAULT_CLIENT_TICK_DURATION,
+            DEFAULT_CLIENT_TICK_DURATION_MS,
         ))
     }
 
@@ -378,18 +382,18 @@ impl JacquardBleClient {
             topology,
             transport,
             transport_sender,
-            DEFAULT_CLIENT_TICK_DURATION,
+            DEFAULT_CLIENT_TICK_DURATION_MS,
         )
     }
 
     #[doc(hidden)]
     #[must_use]
-    pub fn new_with_transport_and_round_interval_for_testing<Transport, Sender>(
+    pub fn new_with_transport_and_round_interval_ms_for_testing<Transport, Sender>(
         local_node_id: NodeId,
         topology: Observation<Configuration>,
         transport: Transport,
         transport_sender: Sender,
-        tick_duration: Duration,
+        tick_duration_ms: Duration,
     ) -> Self
     where
         Transport: BleBridgeIo + Send + 'static,
@@ -400,11 +404,12 @@ impl JacquardBleClient {
             topology,
             transport,
             transport_sender,
-            tick_duration,
+            tick_duration_ms,
         )
     }
 
     pub async fn send(&self, to: NodeId, payload: &[u8]) -> Result<(), BleClientError> {
+        // recursion-exception: same-name forwarding keeps send on the top-level client handle
         let (reply_tx, reply_rx) = oneshot::channel();
         let payload = encode_client_payload(payload);
         self.commands
@@ -418,6 +423,7 @@ impl JacquardBleClient {
         reply_rx.await.map_err(|_| BleClientError::RuntimeStopped)?
     }
 
+    #[must_use = "dropping the incoming stream discards client payload events"]
     pub fn incoming(&self) -> impl Stream<Item = (NodeId, Bytes)> {
         BroadcastStream::new(self.incoming.subscribe())
             .filter_map(|result| async move { result.ok() })
@@ -428,6 +434,7 @@ impl JacquardBleClient {
         self.topology.lock().expect("topology state lock").clone()
     }
 
+    #[must_use = "dropping the topology stream discards topology updates"]
     pub fn topology_stream(&self) -> impl Stream<Item = MeshTopology> {
         let initial = self.topology();
         // Prepend the current snapshot so the caller always gets an immediate first item.
@@ -447,7 +454,7 @@ impl JacquardBleClient {
         topology: Observation<Configuration>,
         transport: Transport,
         transport_sender: Sender,
-        tick_duration: Duration,
+        tick_duration_ms: Duration,
     ) -> Self
     where
         Transport: BleBridgeIo + Send + 'static,
@@ -479,6 +486,7 @@ impl JacquardBleClient {
             for engine_id in router.registered_engine_ids() {
                 if let Some(capabilities) = router.registered_engine_capabilities(&engine_id) {
                     // false means no snapshot change; the projector is still seeded correctly.
+                    // allow-ignored-result: capability seeding is best-effort because the projector already owns the initial topology
                     let _ = projector.ingest_engine_capabilities(capabilities);
                 }
             }
@@ -493,7 +501,7 @@ impl JacquardBleClient {
                 topology_updates: topology_updates_task,
                 projector,
                 route_cache: BTreeMap::new(),
-                tick_duration,
+                tick_duration_ms,
                 shutdown: shutdown_rx,
             };
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -518,11 +526,15 @@ impl JacquardBleClient {
 
 impl Drop for JacquardBleClient {
     fn drop(&mut self) {
+        // recursion-exception: drop uses same-name shutdown steps on owned channels and thread handles
+        // drop-side-effects-exception: dropping the client is the explicit teardown point for the runtime thread
+        // allow-ignored-result: shutdown notification is best-effort during teardown when the runtime already exited
         let _ = self.shutdown.send(true);
         let (replacement, _) = mpsc::channel(1);
         let commands = std::mem::replace(&mut self.commands, replacement);
         drop(commands);
         if let Some(runtime_thread) = self.runtime_thread.take() {
+            // allow-ignored-result: thread join result is ignored during teardown because the runtime may already be unwinding
             let _ = runtime_thread.join();
         }
     }
@@ -540,14 +552,14 @@ pub fn decode_client_payload_for_testing(payload: &[u8]) -> Option<Vec<u8>> {
     decode_client_payload(payload).map(ToOwned::to_owned)
 }
 
-fn duration_for_tick_hint(round_interval: Duration, ticks: Tick) -> Duration {
-    round_interval
+fn duration_for_tick_hint(round_interval_ms: Duration, ticks: Tick) -> Duration {
+    round_interval_ms
         .checked_mul(u32::try_from(ticks.0).unwrap_or(u32::MAX))
         .unwrap_or(Duration::MAX)
 }
 
-fn duration_ms(duration: Duration) -> DurationMs {
-    DurationMs(u32::try_from(duration.as_millis()).unwrap_or(u32::MAX))
+fn duration_ms(duration_ms: Duration) -> DurationMs {
+    DurationMs(u32::try_from(duration_ms.as_millis()).unwrap_or(u32::MAX))
 }
 
 fn build_router<Sender>(

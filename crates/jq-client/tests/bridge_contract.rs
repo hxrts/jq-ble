@@ -14,6 +14,7 @@ where
     T: RoutingMiddleware + RoutingControlPlane,
 {
     // Compile-time bounds check; the value is intentionally unused at runtime.
+    // allow-ignored-result: compile-time trait-bound assertion intentionally discards the runtime value
     let _ = router;
 }
 

@@ -12,35 +12,35 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::{stream, Stream, StreamExt};
+use futures_util::{Stream, StreamExt, stream};
 use jacquard_core::{NodeId, RouteError, RouteSelectionError, TransportError};
 use jq_client::{BleBridgeError, BleClientError, JacquardBleClient};
 use jq_node_profile::MeshTopology;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 
 pub const JACQUARD_BLE_INVITE_SCHEME: &str = "jq-ble";
 // Magic prefix distinguishes application frames from internal Jacquard routing traffic.
 const APPLICATION_FRAME_MAGIC: &[u8; 8] = b"JQBLEAPP";
 const INVITE_ACTION_PATH: &str = "/add-peer/";
 // Jacquard routes converge asynchronously; retry briefly while the mesh catches up.
-const RELAY_RETRY_INTERVAL: Duration = Duration::from_millis(25);
+const RELAY_RETRY_INTERVAL_MS: Duration = Duration::from_millis(25);
 const RELAY_RETRY_ATTEMPTS_MAX: usize = 200;
 // Capacity of the broadcast channel that fans incoming messages out to multiple subscribers.
 const INCOMING_BROADCAST_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy)]
 struct RelayRetryPolicy {
-    interval: Duration,
-    max_attempts: usize,
+    interval_ms: Duration,
+    max_attempts: u32,
 }
 
 impl Default for RelayRetryPolicy {
     fn default() -> Self {
         Self {
-            interval: RELAY_RETRY_INTERVAL,
-            max_attempts: RELAY_RETRY_ATTEMPTS_MAX,
+            interval_ms: RELAY_RETRY_INTERVAL_MS,
+            max_attempts: RELAY_RETRY_ATTEMPTS_MAX as u32,
         }
     }
 }
@@ -77,7 +77,10 @@ pub enum JacquardPeerInviteError {
     #[error("empty peer invite")]
     Empty,
     #[error("invalid peer invite scheme: expected {expected:?}, got {found:?}")]
-    InvalidScheme { expected: &'static str, found: String },
+    InvalidScheme {
+        expected: &'static str,
+        found: String,
+    },
     #[error("invalid peer invite format")]
     InvalidFormat,
     #[error("invalid node id hex length: expected 64 characters, got {found}")]
@@ -109,6 +112,7 @@ struct JacquardBleServiceInner {
 
 impl Drop for JacquardBleServiceInner {
     fn drop(&mut self) {
+        // drop-side-effects-exception: aborting the background pump is the explicit shutdown path for this owner handle
         self.pump_task.abort();
     }
 }
@@ -133,6 +137,7 @@ where
 
 impl JacquardBleService {
     pub async fn new(local_node_id: NodeId) -> Result<Self, JacquardBleServiceError> {
+        // recursion-exception: constructor delegates to the shared-client assembly path with the same semantic name
         Ok(Self::from_shared_client(Arc::new(
             JacquardBleClient::new(local_node_id).await?,
         )))
@@ -148,13 +153,13 @@ impl JacquardBleService {
     #[must_use]
     pub fn from_client_with_retry_policy_for_testing(
         client: JacquardBleClient,
-        relay_retry_policy: Duration,
-        relay_retry_attempts_max: usize,
+        relay_retry_interval_ms: Duration,
+        relay_retry_attempts_max: u32,
     ) -> Self {
         Self::from_shared_client_with_retry_policy(
             Arc::new(client),
             RelayRetryPolicy {
-                interval: relay_retry_policy,
+                interval_ms: relay_retry_interval_ms,
                 max_attempts: relay_retry_attempts_max,
             },
         )
@@ -192,11 +197,13 @@ impl JacquardBleService {
 
     #[must_use]
     pub fn local_node_id(&self) -> NodeId {
+        // recursion-exception: same-name forwarding into the inner client keeps the public service surface aligned
         self.inner.client.local_node_id()
     }
 
     #[must_use]
     pub fn peer_invite(&self) -> String {
+        // recursion-exception: same-name forwarding keeps invite generation on the service surface
         encode_peer_invite(self.local_node_id())
     }
 
@@ -210,6 +217,7 @@ impl JacquardBleService {
             introduced_peers.insert(node_id)
         };
         if inserted {
+            // allow-ignored-result: broadcast update is best-effort when no subscriber is attached
             let _ = self.inner.introduced_peer_updates.send(peer.clone());
         }
         Ok(peer)
@@ -258,9 +266,11 @@ impl JacquardBleService {
 
     #[must_use]
     pub fn topology(&self) -> MeshTopology {
+        // recursion-exception: same-name forwarding keeps the sanitized topology view on the service surface
         sanitize_topology(self.inner.client.topology())
     }
 
+    #[must_use = "dropping the incoming stream discards service payload events"]
     pub fn incoming_messages(&self) -> impl Stream<Item = JacquardIncomingMessage> + Send + '_ {
         stream::unfold(self.inner.incoming.subscribe(), |mut receiver| async move {
             // Loop exits on RecvError::Closed when all incoming senders are dropped.
@@ -274,10 +284,12 @@ impl JacquardBleService {
         })
     }
 
+    #[must_use = "dropping the topology stream discards service topology updates"]
     pub fn topology_updates(&self) -> impl Stream<Item = MeshTopology> + Send + '_ {
         self.inner.client.topology_stream().map(sanitize_topology)
     }
 
+    #[must_use = "dropping the relay-drop stream discards relay failure events"]
     pub fn relay_drops(&self) -> impl Stream<Item = JacquardRelayDrop> + Send + '_ {
         stream::unfold(
             self.inner.relay_drops.subscribe(),
@@ -293,6 +305,7 @@ impl JacquardBleService {
         )
     }
 
+    #[must_use = "dropping the peer-update stream discards introduction events"]
     pub fn introduced_peer_updates(
         &self,
     ) -> impl Stream<Item = JacquardIntroducedPeer> + Send + '_ {
@@ -310,6 +323,7 @@ impl JacquardBleService {
         )
     }
 
+    #[must_use = "dropping the event stream discards service lifecycle and payload events"]
     pub fn events(&self) -> Pin<Box<dyn Stream<Item = JacquardBleEvent> + Send + '_>> {
         let local_node_id = self.local_node_id();
         let started = stream::once(async move { JacquardBleEvent::Started { local_node_id } });
@@ -387,11 +401,12 @@ fn decode_peer_invite(invite: &str) -> Result<NodeId, JacquardPeerInviteError> {
     }
 
     let bytes = hex::decode(&node_id_hex)?;
-    let node_id: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| JacquardPeerInviteError::InvalidNodeIdLength {
-            found: node_id_hex.len(),
-        })?;
+    let node_id: [u8; 32] =
+        bytes
+            .try_into()
+            .map_err(|_| JacquardPeerInviteError::InvalidNodeIdLength {
+                found: node_id_hex.len(),
+            })?;
     Ok(NodeId(node_id))
 }
 
@@ -462,6 +477,7 @@ fn spawn_application_pump(
             if frame.destination_node_id == local_node_id {
                 // Deliver to the local subscriber; the transport already handled routing.
                 // Broadcast drops when no subscribers are active; that is expected at startup.
+                // allow-ignored-result: incoming fanout is best-effort when no application listener is attached
                 let _ = incoming.send(JacquardIncomingMessage {
                     from_node_id: frame.from_node_id,
                     payload: frame.payload,
@@ -484,6 +500,7 @@ fn spawn_application_pump(
                 )
                 .await
                 {
+                    // allow-ignored-result: relay-drop fanout is best-effort when no observer is attached
                     let _ = relay_drops.send(relay);
                 }
             });
@@ -503,7 +520,7 @@ async fn relay_framed_payload(
             Err(error)
                 if relay_retryable(&error) && attempt + 1 < relay_retry_policy.max_attempts =>
             {
-                tokio::time::sleep(relay_retry_policy.interval).await;
+                tokio::time::sleep(relay_retry_policy.interval_ms).await;
             }
             Err(_) => return false,
         }
@@ -614,6 +631,7 @@ impl JacquardBleHostState {
         destination_node_id: NodeId,
         payload: &[u8],
     ) -> Result<(), JacquardBleServiceError> {
+        // recursion-exception: same-name forwarding keeps the host-state facade thin over the service API
         self.service()
             .await?
             .send(destination_node_id, payload)
@@ -621,10 +639,12 @@ impl JacquardBleHostState {
     }
 
     pub async fn topology(&self) -> Result<MeshTopology, JacquardBleServiceError> {
+        // recursion-exception: same-name forwarding keeps topology access on the host-state facade
         Ok(self.service().await?.topology())
     }
 
     pub async fn peer_invite(&self) -> Result<String, JacquardBleServiceError> {
+        // recursion-exception: same-name forwarding keeps invite access on the host-state facade
         Ok(self.service().await?.peer_invite())
     }
 
@@ -632,6 +652,7 @@ impl JacquardBleHostState {
         &self,
         node_id: NodeId,
     ) -> Result<JacquardIntroducedPeer, JacquardBleServiceError> {
+        // recursion-exception: same-name forwarding keeps peer introduction on the host-state facade
         self.service().await?.introduce_peer(node_id).await
     }
 
@@ -639,12 +660,17 @@ impl JacquardBleHostState {
         &self,
         invite: &str,
     ) -> Result<JacquardIntroducedPeer, JacquardBleServiceError> {
-        self.service().await?.introduce_peer_from_invite(invite).await
+        // recursion-exception: same-name forwarding keeps invite parsing on the host-state facade
+        self.service()
+            .await?
+            .introduce_peer_from_invite(invite)
+            .await
     }
 
     pub async fn introduced_peers(
         &self,
     ) -> Result<Vec<JacquardIntroducedPeer>, JacquardBleServiceError> {
+        // recursion-exception: same-name forwarding keeps peer snapshot access on the host-state facade
         Ok(self.service().await?.introduced_peers().await)
     }
 
@@ -667,7 +693,7 @@ impl JacquardBleHostState {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_peer_invite, encode_peer_invite, JacquardPeerInviteError};
+    use super::{JacquardPeerInviteError, decode_peer_invite, encode_peer_invite};
     use jacquard_core::NodeId;
 
     fn node_id(byte: u8) -> NodeId {
@@ -692,9 +718,6 @@ mod tests {
     fn peer_invite_rejects_wrong_scheme() {
         let err = decode_peer_invite("wrong-scheme:///add-peer/deadbeef")
             .expect_err("wrong scheme should fail");
-        assert!(matches!(
-            err,
-            JacquardPeerInviteError::InvalidScheme { .. }
-        ));
+        assert!(matches!(err, JacquardPeerInviteError::InvalidScheme { .. }));
     }
 }

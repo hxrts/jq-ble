@@ -64,6 +64,7 @@ pub(crate) async fn read_l2cap_identity(
     Ok(NodeId(bytes))
 }
 
+#[must_use]
 pub(crate) fn spawn_l2cap_channel_tasks(
     channel_id: BleChannelId,
     channel: L2capChannel,
@@ -73,7 +74,8 @@ pub(crate) fn spawn_l2cap_channel_tasks(
     let (reader, writer) = tokio::io::split(channel);
     let mut framed_reader = FramedRead::new(reader, l2cap_codec());
     let mut framed_writer = FramedWrite::new(writer, l2cap_codec());
-    let (outbound_tx, mut outbound_rx) = mpsc::channel::<Vec<u8>>(DEFAULT_COMMAND_CAPACITY);
+    let (outbound_tx, mut outbound_rx) =
+        mpsc::channel::<Vec<u8>>(DEFAULT_COMMAND_CAPACITY as usize);
     let recv_tx = event_tx.clone();
 
     // Reader task: decode length-prefixed frames and forward them to the runtime task's select loop.
@@ -97,6 +99,7 @@ pub(crate) fn spawn_l2cap_channel_tasks(
         }
         // Signal closure so the runtime task can clean up the session entry.
         // If the send fails, the runtime task's receiver is gone and cleanup is already moot.
+        // allow-ignored-result: closure notification is best-effort when the runtime task already shut down
         let _ = recv_tx
             .send(L2capRuntimeEvent::ChannelClosed { channel_id })
             .await;

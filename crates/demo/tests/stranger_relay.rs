@@ -18,10 +18,11 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use demo::{JacquardBleEvent, JacquardBleHostState, JacquardBleService, JacquardBleServiceError};
 use futures_util::{FutureExt, Stream, StreamExt};
 use jacquard_adapter::{
-    dispatch_mailbox, transport_ingress_mailbox, DispatchReceiver, DispatchSender,
-    TransportIngressClass, TransportIngressNotifier,
+    DispatchReceiver, DispatchSender, TransportIngressClass, TransportIngressNotifier,
+    dispatch_mailbox, transport_ingress_mailbox,
 };
 use jacquard_batman::BATMAN_ENGINE_ID;
 use jacquard_core::{
@@ -33,24 +34,21 @@ use jacquard_core::{
 };
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
 use jacquard_pathway::PATHWAY_ENGINE_ID;
-use jacquard_traits::{effect_handler, TransportSenderEffects};
+use jacquard_traits::{TransportSenderEffects, effect_handler};
 use jq_client::{
-    decode_client_payload_for_testing, encode_client_payload_for_testing, BleBridgeIo,
-    BleClientError, JacquardBleClient,
+    BleBridgeIo, BleClientError, JacquardBleClient, decode_client_payload_for_testing,
+    encode_client_payload_for_testing,
 };
 use jq_node_profile::MeshTopology;
-use demo::{
-    JacquardBleEvent, JacquardBleHostState, JacquardBleService, JacquardBleServiceError,
-};
 
 // Magic prefix that marks a harness application frame. The service layer uses
 // this to distinguish addressed app messages from raw router protocol traffic.
 const APPLICATION_FRAME_MAGIC: &[u8; 8] = b"JQBLEAPP";
 
 const HARNESS_MAILBOX_CAPACITY: usize = 1024;
-const BRIDGE_ROUND_INTERVAL_FOR_TESTS: Duration = Duration::ZERO;
-const RELAY_RETRY_INTERVAL_FOR_TESTS: Duration = Duration::ZERO;
-const RELAY_RETRY_ATTEMPTS_FOR_TESTS: usize = 64;
+const BRIDGE_ROUND_FOR_TESTS_MS: Duration = Duration::ZERO;
+const RELAY_RETRY_FOR_TESTS_MS: Duration = Duration::ZERO;
+const RELAY_RETRY_ATTEMPTS_FOR_TESTS: u32 = 64;
 const DISCOVERY_ROUNDS: usize = 128;
 const CONVERGENCE_ROUNDS: usize = 256;
 const DELIVERY_ROUNDS: usize = 256;
@@ -109,6 +107,7 @@ struct FakeTransport {
 
 impl FakeTransport {
     fn new(outbound: DispatchReceiver<OutboundFrame>) -> Self {
+        // recursion-exception: constructor assembles the fake transport while retaining the conventional `new` entrypoint
         let (ingress_sender, ingress_receiver, notifier) =
             transport_ingress_mailbox(HARNESS_MAILBOX_CAPACITY);
         Self {
@@ -178,6 +177,7 @@ struct HarnessNode {
 
 impl HarnessNode {
     fn topology(&self) -> MeshTopology {
+        // recursion-exception: same-name forwarding keeps topology access on the harness node surface
         self.service.topology()
     }
 
@@ -203,7 +203,7 @@ impl RelayHarness {
             let node = build_harness_node(
                 node_id,
                 five_node_line_topology(node_id),
-                RELAY_RETRY_INTERVAL_FOR_TESTS,
+                RELAY_RETRY_FOR_TESTS_MS,
                 RELAY_RETRY_ATTEMPTS_FOR_TESTS,
             )
             .await;
@@ -682,8 +682,8 @@ fn decode_application_frame(payload: &[u8]) -> Option<(NodeId, NodeId, Vec<u8>)>
 async fn build_harness_node(
     node_id: NodeId,
     initial_topology: Observation<Configuration>,
-    relay_retry_interval: Duration,
-    relay_retry_attempts_max: usize,
+    relay_retry_interval_ms: Duration,
+    relay_retry_attempts_max: u32,
 ) -> HarnessNode {
     let (outbound_tx, outbound_rx) = dispatch_mailbox(HARNESS_MAILBOX_CAPACITY);
     let transport_sender = TestTransportSender {
@@ -692,19 +692,19 @@ async fn build_harness_node(
     let transport = FakeTransport::new(outbound_rx);
     let ingress_sender = transport.ingress_sender.clone();
     let flushed = Arc::clone(&transport.flushed);
-    let client = JacquardBleClient::new_with_transport_and_round_interval_for_testing(
+    let client = JacquardBleClient::new_with_transport_and_round_interval_ms_for_testing(
         node_id,
         initial_topology,
         transport,
         transport_sender,
-        BRIDGE_ROUND_INTERVAL_FOR_TESTS,
+        BRIDGE_ROUND_FOR_TESTS_MS,
     );
     let state = JacquardBleHostState::default();
     let service = state
         .install_for_testing(
             JacquardBleService::from_client_with_retry_policy_for_testing(
                 client,
-                relay_retry_interval,
+                relay_retry_interval_ms,
                 relay_retry_attempts_max,
             ),
         )
@@ -743,21 +743,15 @@ async fn deliver_with_retries(
     for _ in 0..rounds {
         match harness.node(sender).state.send(destination, payload).await {
             Ok(()) => {
-                if let Some(message) = wait_for_message(
-                    harness,
-                    incoming,
-                    sender,
-                    payload,
-                    DELIVERY_ROUNDS,
-                )
-                .await
+                if let Some(message) =
+                    wait_for_message(harness, incoming, sender, payload, DELIVERY_ROUNDS).await
                 {
                     return message;
                 }
             }
-            Err(JacquardBleServiceError::Client(BleClientError::Route(
-                RouteError::Selection(RouteSelectionError::NoCandidate),
-            ))) => {}
+            Err(JacquardBleServiceError::Client(BleClientError::Route(RouteError::Selection(
+                RouteSelectionError::NoCandidate,
+            )))) => {}
             Err(error) => panic!("unexpected send failure: {error:?}"),
         }
         harness.pump_rounds(1).await;
@@ -776,10 +770,11 @@ where
     S: Stream<Item = demo::JacquardIncomingMessage>,
 {
     for _ in 0..rounds {
-        if let Some(message) = stream.as_mut().next().now_or_never().flatten() {
-            if message.from_node_id == from_node_id && message.payload == payload {
-                return Some(message);
-            }
+        if let Some(message) = stream.as_mut().next().now_or_never().flatten()
+            && message.from_node_id == from_node_id
+            && message.payload == payload
+        {
+            return Some(message);
         }
         harness.pump_once();
         tokio::task::yield_now().await;
@@ -802,12 +797,12 @@ async fn service_events_surface_start_topology_discovery_and_incoming_payloads()
     };
     let transport = FakeTransport::new(outbound_rx);
     let ingress_sender = transport.ingress_sender.clone();
-    let client = JacquardBleClient::new_with_transport_and_round_interval_for_testing(
+    let client = JacquardBleClient::new_with_transport_and_round_interval_ms_for_testing(
         local_node_id,
         local_only_topology(local_node_id),
         transport,
         transport_sender,
-        BRIDGE_ROUND_INTERVAL_FOR_TESTS,
+        BRIDGE_ROUND_FOR_TESTS_MS,
     );
     let service = JacquardBleService::from_client_for_testing(client);
     let mut events = Box::pin(service.events());
@@ -902,12 +897,12 @@ async fn host_state_routes_payloads_through_the_jacquard_host_boundary() {
     };
     let transport = FakeTransport::new(outbound_rx);
     let flushed = Arc::clone(&transport.flushed);
-    let client = JacquardBleClient::new_with_transport_and_round_interval_for_testing(
+    let client = JacquardBleClient::new_with_transport_and_round_interval_ms_for_testing(
         local_node_id,
         direct_peer_topology(local_node_id, remote_node_id),
         transport,
         transport_sender,
-        BRIDGE_ROUND_INTERVAL_FOR_TESTS,
+        BRIDGE_ROUND_FOR_TESTS_MS,
     );
     let state = JacquardBleHostState::default();
     state
@@ -944,14 +939,14 @@ async fn host_state_routes_payloads_through_the_jacquard_host_boundary() {
 
     // A second install on the same host state must fail with AlreadyStarted.
     let (duplicate_tx, duplicate_rx) = dispatch_mailbox(HARNESS_MAILBOX_CAPACITY);
-    let duplicate_client = JacquardBleClient::new_with_transport_and_round_interval_for_testing(
+    let duplicate_client = JacquardBleClient::new_with_transport_and_round_interval_ms_for_testing(
         local_node_id,
         direct_peer_topology(local_node_id, remote_node_id),
         FakeTransport::new(duplicate_rx),
         TestTransportSender {
             outbound: duplicate_tx,
         },
-        BRIDGE_ROUND_INTERVAL_FOR_TESTS,
+        BRIDGE_ROUND_FOR_TESTS_MS,
     );
     let duplicate = state
         .install_for_testing(JacquardBleService::from_client_for_testing(
@@ -1022,8 +1017,7 @@ async fn five_node_line_relays_end_to_end_without_exposing_intermediaries_to_end
         &mut incoming_e,
         CONVERGENCE_ROUNDS,
     )
-        .await
-        ;
+    .await;
     assert_eq!(received_by_e.from_node_id, node_a);
     assert_eq!(received_by_e.payload, b"unknown-intermediary");
 
@@ -1087,8 +1081,7 @@ async fn five_node_line_relays_end_to_end_without_exposing_intermediaries_to_end
         &mut incoming_a,
         CONVERGENCE_ROUNDS,
     )
-        .await
-        ;
+    .await;
     assert_eq!(received_by_a.from_node_id, node_e);
     assert_eq!(received_by_a.payload, b"return-path");
 }
@@ -1116,8 +1109,7 @@ async fn transient_disconnect_drops_delivery_until_link_is_repaired() {
         &mut incoming_e,
         CONVERGENCE_ROUNDS,
     )
-        .await
-        ;
+    .await;
     assert_eq!(baseline.from_node_id, node_a);
     assert_eq!(baseline.payload, b"before-fault");
 
@@ -1145,9 +1137,15 @@ async fn transient_disconnect_drops_delivery_until_link_is_repaired() {
             )))
     ));
     assert!(
-        wait_for_message(&harness, &mut incoming_e, node_a, b"during-fault", QUIET_ROUNDS)
-            .await
-            .is_none(),
+        wait_for_message(
+            &harness,
+            &mut incoming_e,
+            node_a,
+            b"during-fault",
+            QUIET_ROUNDS
+        )
+        .await
+        .is_none(),
         "no end-to-end delivery should occur while the middle link is faulted"
     );
 
@@ -1170,8 +1168,7 @@ async fn transient_disconnect_drops_delivery_until_link_is_repaired() {
         &mut incoming_e,
         CONVERGENCE_ROUNDS,
     )
-        .await
-        ;
+    .await;
     assert_eq!(repaired.from_node_id, node_a);
     assert_eq!(repaired.payload, b"after-repair");
 }
@@ -1221,8 +1218,8 @@ async fn stalled_relay_does_not_block_local_delivery_or_leak_transit_payloads() 
         b"deliver-local",
         CONVERGENCE_ROUNDS * 16,
     )
-        .await
-        .expect("local delivery should not be blocked by relay retries");
+    .await
+    .expect("local delivery should not be blocked by relay retries");
     assert_eq!(delivered.from_node_id, node_a);
     assert_eq!(delivered.payload, b"deliver-local");
     assert!(

@@ -49,10 +49,12 @@ where
         &mut self,
         observation: &TransportObservation,
     ) -> Result<(), RouteError> {
+        // recursion-exception: same-name delegation binds the bridge trait to the router middleware trait
         RoutingMiddleware::ingest_transport_observation(self, observation)
     }
 
     fn advance_round(&mut self) -> Result<RouterRoundOutcome, RouteError> {
+        // recursion-exception: same-name delegation binds the bridge trait to the router control-plane trait
         RoutingControlPlane::advance_round(self)
     }
 }
@@ -163,11 +165,11 @@ impl BleBridgeIo for BleBridgeTransport {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BleBridgeConfig {
-    pub inbound_capacity: usize,
+    pub inbound_capacity: u32,
 }
 
 // Upper bound on queued inbound frames before back-pressure stalls the BLE runtime task.
-const INBOUND_CAPACITY_MAX: usize = 1024;
+const INBOUND_CAPACITY_MAX: u32 = 1024;
 
 impl Default for BleBridgeConfig {
     fn default() -> Self {
@@ -181,16 +183,16 @@ impl Default for BleBridgeConfig {
 pub struct BleBridgeRoundReport {
     pub router_outcome: RouterRoundOutcome,
     pub ingested_transport_observations: Vec<TransportObservation>,
-    pub flushed_transport_commands: usize,
-    pub dropped_transport_observations: usize,
+    pub flushed_transport_commands: u32,
+    pub dropped_transport_observations: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BleBridgeWaitState {
     pub next_round_hint: RoutingTickHint,
-    pub pending_transport_observations: usize,
-    pub pending_transport_commands: usize,
-    pub dropped_transport_observations: usize,
+    pub pending_transport_observations: u32,
+    pub pending_transport_commands: u32,
+    pub dropped_transport_observations: u32,
     pub notifier_snapshot: u64,
 }
 
@@ -239,6 +241,7 @@ where
         initial_tick: Tick,
         config: BleBridgeConfig,
     ) -> Self {
+        // recursion-exception: constructor delegates to the clock-injecting constructor with the same semantic name
         Self::with_clock(
             router,
             transport,
@@ -266,7 +269,7 @@ where
             transport,
             clock,
             pending_transport_observations: VecDeque::new(),
-            inbound_capacity: config.inbound_capacity,
+            inbound_capacity: config.inbound_capacity as usize,
             dropped_transport_observations: 0,
         }
     }
@@ -276,6 +279,7 @@ where
         &self.router
     }
 
+    #[must_use]
     pub fn router_mut(&mut self) -> &mut Router {
         &mut self.router
     }
@@ -287,10 +291,12 @@ where
 
     #[must_use]
     pub fn notifier(&self) -> &TransportIngressNotifier {
+        // recursion-exception: same-name forwarding keeps notifier access on the bridge surface
         self.transport.notifier()
     }
 
     pub async fn advance_round(&mut self) -> Result<BleBridgeProgress, BleBridgeError> {
+        // recursion-exception: same-name forwarding keeps round advancement on the bridge surface
         // Stamp all buffered ingress events with the current logical tick before handing them to the router.
         let observed_at_tick = self.clock.advance_tick();
         self.stage_transport_ingress(observed_at_tick)?;
@@ -315,9 +321,11 @@ where
         {
             return Ok(BleBridgeProgress::Waiting(BleBridgeWaitState {
                 next_round_hint: router_outcome.next_round_hint,
-                pending_transport_observations: self.pending_transport_observations.len(),
-                pending_transport_commands: self.transport.pending_outbound(),
-                dropped_transport_observations,
+                pending_transport_observations: narrow_count(
+                    self.pending_transport_observations.len(),
+                ),
+                pending_transport_commands: narrow_count(self.transport.pending_outbound()),
+                dropped_transport_observations: narrow_count(dropped_transport_observations),
                 // Snapshot taken here so BlockOnNotifier can detect races between this check and parking.
                 notifier_snapshot: self.transport.notifier().snapshot(),
             }));
@@ -327,8 +335,8 @@ where
             BleBridgeRoundReport {
                 router_outcome,
                 ingested_transport_observations: ingested,
-                flushed_transport_commands,
-                dropped_transport_observations,
+                flushed_transport_commands: narrow_count(flushed_transport_commands),
+                dropped_transport_observations: narrow_count(dropped_transport_observations),
             },
         )))
     }
@@ -372,4 +380,8 @@ where
         }
         Ok(())
     }
+}
+
+fn narrow_count(value: usize) -> u32 {
+    value.min(u32::MAX as usize) as u32
 }

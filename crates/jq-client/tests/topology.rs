@@ -9,19 +9,19 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use jacquard_adapter::{dispatch_mailbox, TransportIngressClass};
+use jacquard_adapter::{TransportIngressClass, dispatch_mailbox};
 use jacquard_batman::BATMAN_ENGINE_ID;
 use jacquard_core::{
     Configuration, ControllerId, Environment, FactSourceClass, LinkBuilder, LinkEndpoint,
     LinkRuntimeState, NodeId, Observation, OriginAuthenticationClass, PartitionRecoveryClass,
-    RatioPermille, RepairCapability, RouteEpoch, RoutingEvidenceClass, Tick,
-    TransportIngressEvent, TransportKind,
+    RatioPermille, RepairCapability, RouteEpoch, RoutingEvidenceClass, Tick, TransportIngressEvent,
+    TransportKind,
 };
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
 use jacquard_pathway::PATHWAY_ENGINE_ID;
 use jq_client::JacquardBleClient;
 
-use common::{ble_endpoint, FakeTransport, TestTransportSender};
+use common::{FakeTransport, TestTransportSender, ble_endpoint};
 
 // --- Topology builders (NodePreset-based) ------------------------------------
 //
