@@ -57,6 +57,7 @@
           with pkgs;
           [
             openssl
+            zlib
           ]
           ++ lib.optionals stdenv.isLinux [
             dbus

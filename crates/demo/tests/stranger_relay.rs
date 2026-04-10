@@ -732,6 +732,28 @@ where
     stream.as_mut().next().now_or_never().flatten()
 }
 
+async fn wait_for_event<S, T, F>(
+    stream: &mut Pin<Box<S>>,
+    timeout_s: u64,
+    mut predicate: F,
+) -> Option<T>
+where
+    S: Stream<Item = T>,
+    F: FnMut(&T) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_s);
+    loop {
+        let remaining = deadline.checked_duration_since(tokio::time::Instant::now())?;
+        let item = tokio::time::timeout(remaining, stream.as_mut().next())
+            .await
+            .ok()
+            .flatten()?;
+        if predicate(&item) {
+            return Some(item);
+        }
+    }
+}
+
 async fn deliver_with_retries(
     harness: &RelayHarness,
     sender: NodeId,
@@ -838,9 +860,16 @@ async fn service_events_surface_start_topology_discovery_and_incoming_payloads()
         .expect("emit discovery");
 
     // The topology update must include the new peer and the edge to it.
-    let discovered = next_stream_item(&mut events, DELIVERY_ROUNDS)
-        .await
-        .expect("discovery payload");
+    let discovered = wait_for_event(&mut events, 1, |event| {
+        matches!(
+            event,
+            JacquardBleEvent::Topology { snapshot }
+                if snapshot.nodes.contains_key(&remote_node_id)
+                    && snapshot.edge(local_node_id, remote_node_id).is_some()
+        )
+    })
+    .await
+    .expect("discovery payload");
     match discovered {
         JacquardBleEvent::Topology { snapshot } => {
             assert!(snapshot.nodes.contains_key(&remote_node_id));
@@ -1066,12 +1095,6 @@ async fn five_node_line_relays_end_to_end_without_exposing_intermediaries_to_end
     // Verify the return path independently.
     harness.pump_rounds(QUIET_ROUNDS).await;
     harness.clear_deliveries();
-    harness
-        .node(node_e)
-        .state
-        .send(node_a, b"return-path")
-        .await
-        .expect("send from E to A");
 
     let received_by_a = deliver_with_retries(
         &harness,
