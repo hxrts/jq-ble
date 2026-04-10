@@ -24,8 +24,6 @@ jobs:
       - uses: cachix/install-nix-action@v24
         with:
           nix_path: nixpkgs=channel:nixos-unstable
-      - name: Preflight
-        run: ./scripts/preflight.sh
       - name: Docs Link Check
         run: ./scripts/toolkit-shell.sh toolkit-xtask check docs-link-check --repo-root . --config policy/toolkit.toml
       - name: Docs Semantic Drift

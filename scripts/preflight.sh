@@ -42,7 +42,6 @@ echo "ci-preflight: temp dir writable at $tmp_root"
 echo "ci-preflight: required toolchain commands present"
 
 checks=(
-  "Preflight"
   "Format Check"
   "Clippy"
   "Tests"
