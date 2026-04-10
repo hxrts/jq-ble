@@ -38,7 +38,7 @@
           ];
         };
 
-        toolkitPackages = toolkit.packages.${system};
+        toolkitSupport = toolkit.lib.${system}.consumerShellSupport;
 
         nativeBuildInputs = with pkgs; [
           rustToolchain
@@ -46,25 +46,14 @@
           just
           perl
           ripgrep
-          toolkitPackages.toolkit-xtask
-          toolkitPackages.toolkit-fmt
-          toolkitPackages.toolkit-install-dylint
-          toolkitPackages.toolkit-dylint
-          toolkitPackages.toolkit-dylint-link
-        ];
+        ] ++ toolkitSupport.packages;
 
         buildInputs =
           with pkgs;
           [
             openssl
-            zlib
           ]
-          ++ lib.optionals stdenv.isLinux [
-            dbus
-          ]
-          ++ lib.optionals stdenv.isDarwin [
-            libiconv
-          ];
+          ++ toolkitSupport.buildInputs;
 
       in
       {
@@ -72,7 +61,7 @@
           inherit nativeBuildInputs buildInputs;
 
           shellHook = ''
-            export TOOLKIT_ROOT="${toolkit.outPath}"
+            ${toolkitSupport.shellHook}
 
             echo "jq-ble development environment"
             echo "Rust: $(rustc --version)"
