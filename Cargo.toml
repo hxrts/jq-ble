@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "crates/demo",
+    "crates/jq-client",
+    "crates/jq-link-profile",
+    "crates/jq-node-profile",
+]
+resolver = "2"
+
+[workspace.dependencies]
+blew = { git = "https://github.com/mcginty/blew", package = "blew" }

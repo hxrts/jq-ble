@@ -1,0 +1,698 @@
+//! Generic host-side integration story for Jacquard over BLE.
+//!
+//! This crate demonstrates how a host environment can wrap [`jq_client`] and
+//! expose a higher-level service/state surface without depending on any
+//! particular UI framework. Event publication is modeled as a generic sink so
+//! embedders can integrate with a desktop app, CLI, mobile shell, or another host.
+
+use std::collections::BTreeSet;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures_util::{stream, Stream, StreamExt};
+use jacquard_core::{NodeId, RouteError, RouteSelectionError, TransportError};
+use jq_client::{BleBridgeError, BleClientError, JacquardBleClient};
+use jq_node_profile::MeshTopology;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use tokio::sync::{broadcast, Mutex};
+
+pub const JACQUARD_BLE_INVITE_SCHEME: &str = "jq-ble";
+// Magic prefix distinguishes application frames from internal Jacquard routing traffic.
+const APPLICATION_FRAME_MAGIC: &[u8; 8] = b"JQBLEAPP";
+const INVITE_ACTION_PATH: &str = "/add-peer/";
+// Jacquard routes converge asynchronously; retry briefly while the mesh catches up.
+const RELAY_RETRY_INTERVAL: Duration = Duration::from_millis(25);
+const RELAY_RETRY_ATTEMPTS_MAX: usize = 200;
+// Capacity of the broadcast channel that fans incoming messages out to multiple subscribers.
+const INCOMING_BROADCAST_CAPACITY: usize = 64;
+
+#[derive(Clone, Copy)]
+struct RelayRetryPolicy {
+    interval: Duration,
+    max_attempts: usize,
+}
+
+impl Default for RelayRetryPolicy {
+    fn default() -> Self {
+        Self {
+            interval: RELAY_RETRY_INTERVAL,
+            max_attempts: RELAY_RETRY_ATTEMPTS_MAX,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JacquardIncomingMessage {
+    pub from_node_id: NodeId,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JacquardBleEvent {
+    Started { local_node_id: NodeId },
+    Incoming { message: JacquardIncomingMessage },
+    PeerIntroduced { peer: JacquardIntroducedPeer },
+    RelayDropped { relay: JacquardRelayDrop },
+    Topology { snapshot: MeshTopology },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JacquardIntroducedPeer {
+    pub node_id: NodeId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JacquardRelayDrop {
+    pub from_node_id: NodeId,
+    pub destination_node_id: NodeId,
+}
+
+#[derive(Debug, Error)]
+pub enum JacquardPeerInviteError {
+    #[error("empty peer invite")]
+    Empty,
+    #[error("invalid peer invite scheme: expected {expected:?}, got {found:?}")]
+    InvalidScheme { expected: &'static str, found: String },
+    #[error("invalid peer invite format")]
+    InvalidFormat,
+    #[error("invalid node id hex length: expected 64 characters, got {found}")]
+    InvalidNodeIdLength { found: usize },
+    #[error("invalid node id hex")]
+    InvalidNodeIdHex(#[from] hex::FromHexError),
+}
+
+#[derive(Debug, Error)]
+pub enum JacquardBleServiceError {
+    #[error(transparent)]
+    Client(#[from] BleClientError),
+    #[error(transparent)]
+    Invite(#[from] JacquardPeerInviteError),
+    #[error("jacquard client not started")]
+    NotStarted,
+    #[error("jacquard client already started for {local_node_id:?}")]
+    AlreadyStarted { local_node_id: NodeId },
+}
+
+struct JacquardBleServiceInner {
+    client: Arc<JacquardBleClient>,
+    incoming: broadcast::Sender<JacquardIncomingMessage>,
+    introduced_peers: Mutex<BTreeSet<NodeId>>,
+    introduced_peer_updates: broadcast::Sender<JacquardIntroducedPeer>,
+    relay_drops: broadcast::Sender<JacquardRelayDrop>,
+    pump_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for JacquardBleServiceInner {
+    fn drop(&mut self) {
+        self.pump_task.abort();
+    }
+}
+
+#[derive(Clone)]
+pub struct JacquardBleService {
+    inner: Arc<JacquardBleServiceInner>,
+}
+
+pub trait HostEventSink: Send + Sync + 'static {
+    fn publish(&self, event: &JacquardBleEvent);
+}
+
+impl<F> HostEventSink for F
+where
+    F: Fn(&JacquardBleEvent) + Send + Sync + 'static,
+{
+    fn publish(&self, event: &JacquardBleEvent) {
+        self(event);
+    }
+}
+
+impl JacquardBleService {
+    pub async fn new(local_node_id: NodeId) -> Result<Self, JacquardBleServiceError> {
+        Ok(Self::from_shared_client(Arc::new(
+            JacquardBleClient::new(local_node_id).await?,
+        )))
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_client_for_testing(client: JacquardBleClient) -> Self {
+        Self::from_shared_client(Arc::new(client))
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_client_with_retry_policy_for_testing(
+        client: JacquardBleClient,
+        relay_retry_policy: Duration,
+        relay_retry_attempts_max: usize,
+    ) -> Self {
+        Self::from_shared_client_with_retry_policy(
+            Arc::new(client),
+            RelayRetryPolicy {
+                interval: relay_retry_policy,
+                max_attempts: relay_retry_attempts_max,
+            },
+        )
+    }
+
+    fn from_shared_client(client: Arc<JacquardBleClient>) -> Self {
+        Self::from_shared_client_with_retry_policy(client, RelayRetryPolicy::default())
+    }
+
+    fn from_shared_client_with_retry_policy(
+        client: Arc<JacquardBleClient>,
+        relay_retry_policy: RelayRetryPolicy,
+    ) -> Self {
+        let (incoming, _) = broadcast::channel(INCOMING_BROADCAST_CAPACITY);
+        let (introduced_peer_updates, _) = broadcast::channel(INCOMING_BROADCAST_CAPACITY);
+        let (relay_drops, _) = broadcast::channel(INCOMING_BROADCAST_CAPACITY);
+        // The pump task demuxes raw Jacquard payloads into application messages and relay forwards.
+        let pump_task = spawn_application_pump(
+            Arc::clone(&client),
+            incoming.clone(),
+            relay_drops.clone(),
+            relay_retry_policy,
+        );
+        Self {
+            inner: Arc::new(JacquardBleServiceInner {
+                client,
+                incoming,
+                introduced_peers: Mutex::new(BTreeSet::new()),
+                introduced_peer_updates,
+                relay_drops,
+                pump_task,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn local_node_id(&self) -> NodeId {
+        self.inner.client.local_node_id()
+    }
+
+    #[must_use]
+    pub fn peer_invite(&self) -> String {
+        encode_peer_invite(self.local_node_id())
+    }
+
+    pub async fn introduce_peer(
+        &self,
+        node_id: NodeId,
+    ) -> Result<JacquardIntroducedPeer, JacquardBleServiceError> {
+        let peer = JacquardIntroducedPeer { node_id };
+        let inserted = {
+            let mut introduced_peers = self.inner.introduced_peers.lock().await;
+            introduced_peers.insert(node_id)
+        };
+        if inserted {
+            let _ = self.inner.introduced_peer_updates.send(peer.clone());
+        }
+        Ok(peer)
+    }
+
+    pub async fn introduce_peer_from_invite(
+        &self,
+        invite: &str,
+    ) -> Result<JacquardIntroducedPeer, JacquardBleServiceError> {
+        let node_id = decode_peer_invite(invite)?;
+        self.introduce_peer(node_id).await
+    }
+
+    pub async fn introduced_peers(&self) -> Vec<JacquardIntroducedPeer> {
+        self.inner
+            .introduced_peers
+            .lock()
+            .await
+            .iter()
+            .copied()
+            .map(|node_id| JacquardIntroducedPeer { node_id })
+            .collect()
+    }
+
+    pub async fn send(
+        &self,
+        destination_node_id: NodeId,
+        payload: &[u8],
+    ) -> Result<(), JacquardBleServiceError> {
+        let frame = encode_application_frame(self.local_node_id(), destination_node_id, payload);
+        self.send_framed(destination_node_id, &frame).await?;
+        Ok(())
+    }
+
+    async fn send_framed(
+        &self,
+        destination_node_id: NodeId,
+        framed_payload: &[u8],
+    ) -> Result<(), JacquardBleServiceError> {
+        self.inner
+            .client
+            .send(destination_node_id, framed_payload)
+            .await?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn topology(&self) -> MeshTopology {
+        sanitize_topology(self.inner.client.topology())
+    }
+
+    pub fn incoming_messages(&self) -> impl Stream<Item = JacquardIncomingMessage> + Send + '_ {
+        stream::unfold(self.inner.incoming.subscribe(), |mut receiver| async move {
+            // Loop exits on RecvError::Closed when all incoming senders are dropped.
+            loop {
+                match receiver.recv().await {
+                    Ok(message) => return Some((message, receiver)),
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        })
+    }
+
+    pub fn topology_updates(&self) -> impl Stream<Item = MeshTopology> + Send + '_ {
+        self.inner.client.topology_stream().map(sanitize_topology)
+    }
+
+    pub fn relay_drops(&self) -> impl Stream<Item = JacquardRelayDrop> + Send + '_ {
+        stream::unfold(
+            self.inner.relay_drops.subscribe(),
+            |mut receiver| async move {
+                loop {
+                    match receiver.recv().await {
+                        Ok(relay) => return Some((relay, receiver)),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn introduced_peer_updates(
+        &self,
+    ) -> impl Stream<Item = JacquardIntroducedPeer> + Send + '_ {
+        stream::unfold(
+            self.inner.introduced_peer_updates.subscribe(),
+            |mut receiver| async move {
+                loop {
+                    match receiver.recv().await {
+                        Ok(peer) => return Some((peer, receiver)),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn events(&self) -> Pin<Box<dyn Stream<Item = JacquardBleEvent> + Send + '_>> {
+        let local_node_id = self.local_node_id();
+        let started = stream::once(async move { JacquardBleEvent::Started { local_node_id } });
+        let incoming = self
+            .incoming_messages()
+            .map(|message| JacquardBleEvent::Incoming { message });
+        let introduced_peers = self
+            .introduced_peer_updates()
+            .map(|peer| JacquardBleEvent::PeerIntroduced { peer });
+        let relay_drops = self
+            .relay_drops()
+            .map(|relay| JacquardBleEvent::RelayDropped { relay });
+        let topology = self
+            .topology_updates()
+            .map(|snapshot| JacquardBleEvent::Topology { snapshot });
+        Box::pin(started.chain(stream::select(
+            incoming,
+            stream::select(introduced_peers, stream::select(relay_drops, topology)),
+        )))
+    }
+
+    pub fn forward_events_to<S>(&self, sink: S)
+    where
+        S: HostEventSink,
+    {
+        let service = self.clone();
+        let sink = Arc::new(sink);
+        tokio::spawn(async move {
+            let mut events = service.events();
+            // Loop exits when the service's event stream is exhausted on shutdown.
+            while let Some(event) = events.as_mut().next().await {
+                sink.publish(&event);
+            }
+        });
+    }
+}
+
+fn encode_peer_invite(node_id: NodeId) -> String {
+    format!(
+        "{JACQUARD_BLE_INVITE_SCHEME}://{INVITE_ACTION_PATH}{}",
+        hex::encode(node_id.0)
+    )
+}
+
+fn decode_peer_invite(invite: &str) -> Result<NodeId, JacquardPeerInviteError> {
+    let trimmed = invite.trim();
+    if trimmed.is_empty() {
+        return Err(JacquardPeerInviteError::Empty);
+    }
+
+    let node_id_hex = if let Some((scheme, remainder)) = trimmed.split_once("://") {
+        if scheme != JACQUARD_BLE_INVITE_SCHEME {
+            return Err(JacquardPeerInviteError::InvalidScheme {
+                expected: JACQUARD_BLE_INVITE_SCHEME,
+                found: scheme.to_string(),
+            });
+        }
+        let path = if remainder.starts_with('/') {
+            remainder.to_string()
+        } else {
+            format!("/{remainder}")
+        };
+        path.strip_prefix(INVITE_ACTION_PATH)
+            .ok_or(JacquardPeerInviteError::InvalidFormat)?
+            .trim()
+            .to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if node_id_hex.len() != 64 {
+        return Err(JacquardPeerInviteError::InvalidNodeIdLength {
+            found: node_id_hex.len(),
+        });
+    }
+
+    let bytes = hex::decode(&node_id_hex)?;
+    let node_id: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| JacquardPeerInviteError::InvalidNodeIdLength {
+            found: node_id_hex.len(),
+        })?;
+    Ok(NodeId(node_id))
+}
+
+struct ApplicationFrame {
+    from_node_id: NodeId,
+    destination_node_id: NodeId,
+    payload: Vec<u8>,
+}
+
+// Frame layout: [magic 8B][from_node_id 32B][destination_node_id 32B][payload]
+fn encode_application_frame(
+    from_node_id: NodeId,
+    destination_node_id: NodeId,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut framed = Vec::with_capacity(
+        APPLICATION_FRAME_MAGIC.len()
+            + from_node_id.0.len()
+            + destination_node_id.0.len()
+            + payload.len(),
+    );
+    framed.extend_from_slice(APPLICATION_FRAME_MAGIC);
+    framed.extend_from_slice(&from_node_id.0);
+    framed.extend_from_slice(&destination_node_id.0);
+    framed.extend_from_slice(payload);
+    framed
+}
+
+fn decode_application_frame(payload: &[u8], _local_node_id: NodeId) -> Option<ApplicationFrame> {
+    let header_len = APPLICATION_FRAME_MAGIC.len() + 32 + 32;
+    if payload.len() < header_len || !payload.starts_with(APPLICATION_FRAME_MAGIC) {
+        return None;
+    }
+
+    let mut from_node_id = [0_u8; 32];
+    from_node_id.copy_from_slice(
+        &payload[APPLICATION_FRAME_MAGIC.len()..APPLICATION_FRAME_MAGIC.len() + 32],
+    );
+
+    let destination_offset = APPLICATION_FRAME_MAGIC.len() + 32;
+    let mut destination_node_id = [0_u8; 32];
+    destination_node_id.copy_from_slice(&payload[destination_offset..destination_offset + 32]);
+
+    Some(ApplicationFrame {
+        from_node_id: NodeId(from_node_id),
+        destination_node_id: NodeId(destination_node_id),
+        payload: payload[header_len..].to_vec(),
+    })
+}
+
+fn spawn_application_pump(
+    client: Arc<JacquardBleClient>,
+    incoming: broadcast::Sender<JacquardIncomingMessage>,
+    relay_drops: broadcast::Sender<JacquardRelayDrop>,
+    relay_retry_policy: RelayRetryPolicy,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let local_node_id = client.local_node_id();
+        let mut transport_incoming = Box::pin(client.incoming());
+        // Loop exits when the client's incoming stream is exhausted on shutdown.
+        while let Some((_transport_from_node_id, payload)) =
+            transport_incoming.as_mut().next().await
+        {
+            let Some(frame) = decode_application_frame(&payload, local_node_id) else {
+                // Drop anything that isn't a recognized application frame (e.g. internal Jacquard traffic).
+                continue;
+            };
+            if frame.destination_node_id == local_node_id {
+                // Deliver to the local subscriber; the transport already handled routing.
+                // Broadcast drops when no subscribers are active; that is expected at startup.
+                let _ = incoming.send(JacquardIncomingMessage {
+                    from_node_id: frame.from_node_id,
+                    payload: frame.payload,
+                });
+                continue;
+            }
+            // This node is an intermediate hop; forward the frame toward the true destination.
+            let relay_client = Arc::clone(&client);
+            let relay_drops = relay_drops.clone();
+            let relay = JacquardRelayDrop {
+                from_node_id: frame.from_node_id,
+                destination_node_id: frame.destination_node_id,
+            };
+            tokio::spawn(async move {
+                if !relay_framed_payload(
+                    &relay_client,
+                    frame.destination_node_id,
+                    &payload,
+                    relay_retry_policy,
+                )
+                .await
+                {
+                    let _ = relay_drops.send(relay);
+                }
+            });
+        }
+    })
+}
+
+async fn relay_framed_payload(
+    client: &JacquardBleClient,
+    destination_node_id: NodeId,
+    payload: &[u8],
+    relay_retry_policy: RelayRetryPolicy,
+) -> bool {
+    for attempt in 0..relay_retry_policy.max_attempts {
+        match client.send(destination_node_id, payload).await {
+            Ok(()) => return true,
+            Err(error)
+                if relay_retryable(&error) && attempt + 1 < relay_retry_policy.max_attempts =>
+            {
+                tokio::time::sleep(relay_retry_policy.interval).await;
+            }
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+fn relay_retryable(error: &BleClientError) -> bool {
+    matches!(
+        error,
+        BleClientError::Route(
+            RouteError::Selection(RouteSelectionError::NoCandidate)
+                | RouteError::Transport(TransportError::Unavailable | TransportError::TimedOut)
+        ) | BleClientError::Transport(TransportError::Unavailable | TransportError::TimedOut)
+            | BleClientError::Bridge(
+                BleBridgeError::Route(RouteError::Transport(
+                    TransportError::Unavailable | TransportError::TimedOut
+                )) | BleBridgeError::Transport(
+                    TransportError::Unavailable | TransportError::TimedOut
+                )
+            )
+    )
+}
+
+// Strip topology details the local node cannot directly verify: non-adjacent nodes, relay paths.
+fn sanitize_topology(snapshot: MeshTopology) -> MeshTopology {
+    let local_node_id = snapshot.local_node_id;
+    let mut visible_node_ids = BTreeSet::from([local_node_id]);
+    let edges = snapshot
+        .edges
+        .into_iter()
+        .filter_map(|((from_node_id, to_node_id), edge)| {
+            (from_node_id == local_node_id).then(|| {
+                visible_node_ids.insert(to_node_id);
+                ((from_node_id, to_node_id), edge)
+            })
+        })
+        .collect();
+    let nodes = snapshot
+        .nodes
+        .into_iter()
+        .filter(|(node_id, _)| visible_node_ids.contains(node_id))
+        .collect();
+    let active_routes = snapshot
+        .active_routes
+        .into_iter()
+        .filter(|(_, route)| {
+            visible_node_ids.contains(&route.owner_node_id)
+                && visible_node_ids.contains(&route.terminal_node_id)
+        })
+        .collect();
+
+    MeshTopology {
+        local_node_id,
+        observed_at_tick: snapshot.observed_at_tick,
+        nodes,
+        edges,
+        active_routes,
+    }
+}
+
+#[derive(Default)]
+pub struct JacquardBleHostState {
+    service: Mutex<Option<Arc<JacquardBleService>>>,
+}
+
+impl JacquardBleHostState {
+    pub async fn start(
+        &self,
+        local_node_id: NodeId,
+    ) -> Result<Arc<JacquardBleService>, JacquardBleServiceError> {
+        let mut guard = self.service.lock().await;
+        if let Some(service) = guard.as_ref() {
+            return Err(JacquardBleServiceError::AlreadyStarted {
+                local_node_id: service.local_node_id(),
+            });
+        }
+
+        let service = Arc::new(JacquardBleService::new(local_node_id).await?);
+        *guard = Some(Arc::clone(&service));
+        Ok(service)
+    }
+
+    pub async fn start_with_event_sink<S>(
+        &self,
+        local_node_id: NodeId,
+        sink: S,
+    ) -> Result<Arc<JacquardBleService>, JacquardBleServiceError>
+    where
+        S: HostEventSink,
+    {
+        let service = self.start(local_node_id).await?;
+        service.forward_events_to(sink);
+        Ok(service)
+    }
+
+    pub async fn service(&self) -> Result<Arc<JacquardBleService>, JacquardBleServiceError> {
+        self.service
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or(JacquardBleServiceError::NotStarted)
+    }
+
+    pub async fn send(
+        &self,
+        destination_node_id: NodeId,
+        payload: &[u8],
+    ) -> Result<(), JacquardBleServiceError> {
+        self.service()
+            .await?
+            .send(destination_node_id, payload)
+            .await
+    }
+
+    pub async fn topology(&self) -> Result<MeshTopology, JacquardBleServiceError> {
+        Ok(self.service().await?.topology())
+    }
+
+    pub async fn peer_invite(&self) -> Result<String, JacquardBleServiceError> {
+        Ok(self.service().await?.peer_invite())
+    }
+
+    pub async fn introduce_peer(
+        &self,
+        node_id: NodeId,
+    ) -> Result<JacquardIntroducedPeer, JacquardBleServiceError> {
+        self.service().await?.introduce_peer(node_id).await
+    }
+
+    pub async fn introduce_peer_from_invite(
+        &self,
+        invite: &str,
+    ) -> Result<JacquardIntroducedPeer, JacquardBleServiceError> {
+        self.service().await?.introduce_peer_from_invite(invite).await
+    }
+
+    pub async fn introduced_peers(
+        &self,
+    ) -> Result<Vec<JacquardIntroducedPeer>, JacquardBleServiceError> {
+        Ok(self.service().await?.introduced_peers().await)
+    }
+
+    #[doc(hidden)]
+    pub async fn install_for_testing(
+        &self,
+        service: JacquardBleService,
+    ) -> Result<Arc<JacquardBleService>, JacquardBleServiceError> {
+        let mut guard = self.service.lock().await;
+        if let Some(existing) = guard.as_ref() {
+            return Err(JacquardBleServiceError::AlreadyStarted {
+                local_node_id: existing.local_node_id(),
+            });
+        }
+        let service = Arc::new(service);
+        *guard = Some(Arc::clone(&service));
+        Ok(service)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_peer_invite, encode_peer_invite, JacquardPeerInviteError};
+    use jacquard_core::NodeId;
+
+    fn node_id(byte: u8) -> NodeId {
+        NodeId([byte; 32])
+    }
+
+    #[test]
+    fn peer_invite_round_trips_through_deep_link() {
+        let node_id = node_id(7);
+        let invite = encode_peer_invite(node_id);
+        assert_eq!(decode_peer_invite(&invite).expect("decode invite"), node_id);
+    }
+
+    #[test]
+    fn peer_invite_accepts_plain_hex_node_ids() {
+        let node_id = node_id(9);
+        let plain = hex::encode(node_id.0);
+        assert_eq!(decode_peer_invite(&plain).expect("decode plain"), node_id);
+    }
+
+    #[test]
+    fn peer_invite_rejects_wrong_scheme() {
+        let err = decode_peer_invite("wrong-scheme:///add-peer/deadbeef")
+            .expect_err("wrong scheme should fail");
+        assert!(matches!(
+            err,
+            JacquardPeerInviteError::InvalidScheme { .. }
+        ));
+    }
+}

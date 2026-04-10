@@ -1,0 +1,28 @@
+[package]
+name = "jq-link-profile"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jake McGinty <me@jakebot.org>"]
+license = "Apache-2.0"
+description = "BLE link profile for Jacquard routing"
+repository = "https://github.com/hxrts/jq-ble"
+keywords = ["bluetooth", "ble", "jacquard", "mesh", "routing"]
+categories = ["network-programming"]
+
+[dependencies]
+blew = { workspace = true }
+bytes = "1"
+futures-util = { version = "0.3", features = ["sink"] }
+jacquard-adapter = "0.3.2"
+jacquard-core = "0.3.2"
+jacquard-traits = "0.3.2"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["codec"] }
+futures-core = "0.3"
+uuid = "1"
+
+[dev-dependencies]
+blew = { workspace = true, features = ["testing"] }
+tokio = { version = "1", features = ["full"] }

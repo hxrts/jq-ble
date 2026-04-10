@@ -1,0 +1,18 @@
+[package]
+name = "jq-node-profile"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jake McGinty <me@jakebot.org>"]
+license = "Apache-2.0"
+description = "Node and topology snapshot models for Jacquard BLE clients"
+repository = "https://github.com/hxrts/jq-ble"
+keywords = ["bluetooth", "ble", "jacquard", "mesh", "routing"]
+categories = ["network-programming"]
+
+[dependencies]
+jacquard-core = "0.3.2"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+jacquard-reference-client = "0.3.2"
