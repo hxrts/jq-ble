@@ -20,8 +20,8 @@ jacquard-mem-node-profile = "0.3.2"
 jacquard-pathway = "0.3.2"
 jacquard-router = "0.3.2"
 jacquard-traits = "0.3.2"
-jq-link-profile = { path = "../jq-link-profile" }
-jq-node-profile = { path = "../jq-node-profile" }
+jq-link-profile = { version = "0.1.0", path = "../jq-link-profile" }
+jq-node-profile = { version = "0.1.0", path = "../jq-node-profile" }
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "macros"] }
 tokio-stream = { version = "0.1", features = ["sync"] }

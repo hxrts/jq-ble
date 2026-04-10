@@ -61,6 +61,7 @@
           inherit nativeBuildInputs buildInputs;
 
           shellHook = ''
+            [[ -r "$HOME/.local/state/secrets/cargo-registry-token" ]] && export CARGO_REGISTRY_TOKEN="$(cat "$HOME/.local/state/secrets/cargo-registry-token")"
             ${toolkitSupport.shellHook}
 
             echo "jq-ble development environment"
