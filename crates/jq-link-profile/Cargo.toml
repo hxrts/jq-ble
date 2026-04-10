@@ -17,7 +17,7 @@ jacquard-adapter = "0.3.2"
 jacquard-core = "0.3.2"
 jacquard-traits = "0.3.2"
 thiserror = "2"
-tokio = { version = "1", features = ["rt", "sync", "macros"] }
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "macros"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["codec"] }
 futures-core = "0.3"
@@ -25,4 +25,4 @@ uuid = "1"
 
 [dev-dependencies]
 blew = { workspace = true, features = ["testing"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", default-features = false, features = ["full"] }

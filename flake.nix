@@ -5,6 +5,12 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
+    toolkit = {
+      url = "github:hxrts/rust-toolkit";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.rust-overlay.follows = "rust-overlay";
+      inputs.flake-utils.follows = "flake-utils";
+    };
   };
 
   outputs =
@@ -13,6 +19,7 @@
       nixpkgs,
       rust-overlay,
       flake-utils,
+      toolkit,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -31,10 +38,19 @@
           ];
         };
 
+        toolkitPackages = toolkit.packages.${system};
+
         nativeBuildInputs = with pkgs; [
           rustToolchain
           pkg-config
+          just
+          perl
           ripgrep
+          toolkitPackages.toolkit-xtask
+          toolkitPackages.toolkit-fmt
+          toolkitPackages.toolkit-install-dylint
+          toolkitPackages.toolkit-dylint
+          toolkitPackages.toolkit-dylint-link
         ];
 
         buildInputs =
@@ -52,6 +68,8 @@
           inherit nativeBuildInputs buildInputs;
 
           shellHook = ''
+            export TOOLKIT_ROOT="${toolkit.outPath}"
+
             echo "jq-ble development environment"
             echo "Rust: $(rustc --version)"
           '';

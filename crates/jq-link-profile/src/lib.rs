@@ -7,6 +7,8 @@
 //! (channel tasks and identity exchange), [`task`] (single async runtime
 //! owner).
 
+#![forbid(unsafe_code)]
+
 mod gatt;
 mod l2cap;
 mod session;

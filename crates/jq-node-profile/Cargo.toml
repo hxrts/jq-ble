@@ -11,7 +11,7 @@ categories = ["network-programming"]
 
 [dependencies]
 jacquard-core = "0.3.2"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]

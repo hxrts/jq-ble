@@ -1,0 +1,97 @@
+[workspace]
+crate_roots = ["crates"]
+exclude_crates = []
+
+[checks.proc_macro_scope]
+enabled = true
+include_paths = []
+required_markers = [
+  "#[effect_trait",
+  "#[effect_handler",
+  "#[id_type",
+  "#[bounded_value",
+  "#[must_use_handle",
+  "#[public_model",
+  "#[purity",
+  "#[jacquard_traits::purity",
+  "tell! {",
+]
+exclude_files = []
+
+[checks.result_must_use]
+enabled = true
+include_paths = []
+
+[checks.test_boundaries]
+enabled = true
+scan_roots = ["crates"]
+exclude_prefixes = []
+exclude_path_parts = ["/tests/", "/benches/", "/examples/", "/target/"]
+
+[checks.docs_link_check]
+enabled = true
+docs_roots = ["docs", "policy"]
+scratch_dir_prefix = "work/"
+
+[checks.docs_semantic_drift]
+enabled = true
+docs_roots = ["docs", "policy", "scripts"]
+manifest_path = "Cargo.toml"
+planned_crates = []
+
+[checks.crate_root_policy]
+enabled = true
+required_attributes = ["#![forbid(unsafe_code)]"]
+
+[checks.ignored_result]
+enabled = true
+include_paths = ["crates"]
+allowed_comment_markers = ["allow-ignored-result:", "intentionally ignore result"]
+
+[checks.unsafe_boundary]
+enabled = true
+include_paths = ["crates"]
+allowed_path_parts = ["/raw/", "/ffi/", "/sys/"]
+required_comment_markers = ["Safety:"]
+
+[checks.bool_param]
+enabled = true
+include_paths = ["crates"]
+
+[checks.must_use_public_return]
+enabled = true
+include_paths = ["crates"]
+
+[checks.assert_shape]
+enabled = true
+include_paths = ["crates"]
+
+[checks.drop_side_effects]
+enabled = true
+include_paths = ["crates"]
+allow_comment_marker = "drop-side-effects-exception:"
+
+[checks.recursion_guard]
+enabled = true
+include_paths = ["crates"]
+allow_comment_marker = "recursion-exception:"
+
+[checks.naming_units]
+enabled = true
+include_paths = ["crates"]
+
+[checks.limit_constant]
+enabled = true
+include_paths = ["crates"]
+allow_comment_marker = "limit-constant-exception:"
+
+[checks.public_type_width]
+enabled = true
+include_paths = ["crates"]
+banned_types = ["usize", "isize", "f32", "f64"]
+
+[checks.dependency_policy]
+enabled = true
+manifest_roots = ["crates"]
+require_default_features_false = ["serde", "tokio", "futures"]
+banned_dependencies = []

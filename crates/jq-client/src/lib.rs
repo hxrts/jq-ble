@@ -5,6 +5,8 @@
 //! ([`BleRuntimeEffects`]), and topology projection ([`link_profile`],
 //! [`node_profile`]) needed to run a Jacquard mesh over BLE.
 
+#![forbid(unsafe_code)]
+
 mod bridge;
 mod client;
 mod effects;

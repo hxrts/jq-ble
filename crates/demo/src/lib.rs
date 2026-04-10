@@ -5,6 +5,8 @@
 //! particular UI framework. Event publication is modeled as a generic sink so
 //! embedders can integrate with a desktop app, CLI, mobile shell, or another host.
 
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeSet;
 use std::pin::Pin;
 use std::sync::Arc;
