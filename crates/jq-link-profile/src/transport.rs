@@ -210,6 +210,7 @@ pub struct BleTransportComponents {
 }
 
 impl BleTransportComponents {
+    #[must_use = "constructing the BLE transport components has no effect unless the returned components are used"]
     pub async fn new(local_node_id: NodeId, config: BleConfig) -> Result<Self, BleLinkError> {
         // recursion-exception: constructor performs backend setup while retaining the conventional `new` entrypoint
         let central: Central = Central::new().await?;

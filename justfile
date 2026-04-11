@@ -1,4 +1,7 @@
 default:
+    @just ci-dry-run
+
+list:
     @just --list
 
 toolkit_shell_cmd := "./scripts/toolkit-shell.sh"

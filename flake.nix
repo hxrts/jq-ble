@@ -36,9 +36,14 @@
             "rust-src"
             "rust-analyzer"
           ];
+          targets = [
+            "wasm32-unknown-unknown"
+          ];
         };
 
         toolkitSupport = toolkit.lib.${system}.consumerShellSupport;
+
+        toolkitPackages = toolkit.packages.${system};
 
         nativeBuildInputs = with pkgs; [
           rustToolchain
@@ -46,7 +51,14 @@
           just
           perl
           ripgrep
-        ] ++ toolkitSupport.packages;
+        ]
+        ++ toolkitSupport.packages
+        ++ [
+          toolkitPackages.toolkit-clippy
+          toolkitPackages.toolkit-dylint
+          toolkitPackages.toolkit-dylint-link
+          toolkitPackages.toolkit-install-dylint
+        ];
 
         buildInputs =
           with pkgs;
@@ -63,6 +75,7 @@
           shellHook = ''
             [[ -r "$HOME/.local/state/secrets/cargo-registry-token" ]] && export CARGO_REGISTRY_TOKEN="$(cat "$HOME/.local/state/secrets/cargo-registry-token")"
             ${toolkitSupport.shellHook}
+            export TOOLKIT_ROOT=${toolkit}
 
             echo "jq-ble development environment"
             echo "Rust: $(rustc --version)"

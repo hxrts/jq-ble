@@ -84,7 +84,7 @@ pub enum JacquardPeerInviteError {
     #[error("invalid peer invite format")]
     InvalidFormat,
     #[error("invalid node id hex length: expected 64 characters, got {found}")]
-    InvalidNodeIdLength { found: usize },
+    InvalidNodeIdLength { found: u64 },
     #[error("invalid node id hex")]
     InvalidNodeIdHex(#[from] hex::FromHexError),
 }
@@ -136,6 +136,7 @@ where
 }
 
 impl JacquardBleService {
+    #[must_use = "constructing the BLE service has no effect unless the returned service is used"]
     pub async fn new(local_node_id: NodeId) -> Result<Self, JacquardBleServiceError> {
         // recursion-exception: constructor delegates to the shared-client assembly path with the same semantic name
         Ok(Self::from_shared_client(Arc::new(
@@ -396,7 +397,7 @@ fn decode_peer_invite(invite: &str) -> Result<NodeId, JacquardPeerInviteError> {
 
     if node_id_hex.len() != 64 {
         return Err(JacquardPeerInviteError::InvalidNodeIdLength {
-            found: node_id_hex.len(),
+            found: u64::try_from(node_id_hex.len()).expect("node id length fits into u64"),
         });
     }
 
@@ -405,7 +406,7 @@ fn decode_peer_invite(invite: &str) -> Result<NodeId, JacquardPeerInviteError> {
         bytes
             .try_into()
             .map_err(|_| JacquardPeerInviteError::InvalidNodeIdLength {
-                found: node_id_hex.len(),
+                found: u64::try_from(node_id_hex.len()).expect("node id length fits into u64"),
             })?;
     Ok(NodeId(node_id))
 }

@@ -4,10 +4,87 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
-if [ -n "${IN_NIX_SHELL:-}" ] && [ -n "${TOOLKIT_ROOT:-}" ] && command -v toolkit-xtask >/dev/null 2>&1; then
-  exec "$@"
+resolve_pinned_toolkit_root() {
+  if ! command -v nix >/dev/null 2>&1 || [ ! -f "$repo_root/flake.lock" ]; then
+    return 1
+  fi
+
+  local toolkit_rev metadata_json archive_path
+  toolkit_rev="$(
+    perl -0ne '
+      if (/"toolkit"\s*:\s*\{.*?"locked"\s*:\s*\{.*?"rev"\s*:\s*"([0-9a-f]+)"/s) {
+        print $1;
+      }
+    ' "$repo_root/flake.lock"
+  )"
+  if [ -z "$toolkit_rev" ]; then
+    return 1
+  fi
+
+  metadata_json="$(nix flake metadata --json "github:hxrts/toolkit/$toolkit_rev")" || return 1
+  archive_path="$(
+    printf '%s' "$metadata_json" | perl -0ne '
+      while (/"path"\s*:\s*"([^"]+)"/g) {
+        $path = $1;
+      }
+      END {
+        print $path if defined $path;
+      }
+    '
+  )"
+  if [ -z "$archive_path" ]; then
+    return 1
+  fi
+
+  printf '%s\n' "$archive_path"
+}
+
+sanitize_path() {
+  perl -e '
+    my $path = $ENV{PATH} // q();
+    my $home = $ENV{HOME} // q();
+    my $cargo_home = $ENV{CARGO_HOME} // ($home eq q() ? q() : "$home/.cargo");
+    my @drop = grep { $_ ne q() } (
+      $home eq q() ? q() : "$home/.cargo/bin",
+      $cargo_home eq q() ? q() : "$cargo_home/bin",
+    );
+    my %drop = map { $_ => 1 } @drop;
+    my @parts = grep { $_ ne q() && !$drop{$_} } split(/:/, $path, -1);
+    print join(":", @parts);
+  '
+}
+
+run_sanitized() {
+  local sanitized_path toolkit_root
+  sanitized_path="$(sanitize_path)"
+  toolkit_root="${TOOLKIT_ROOT:-}"
+  if pinned_toolkit_root="$(resolve_pinned_toolkit_root)"; then
+    toolkit_root="$pinned_toolkit_root"
+  fi
+  env \
+    -u CARGO \
+    -u RUSTC \
+    -u RUSTDOC \
+    -u RUSTUP_TOOLCHAIN \
+    TOOLKIT_ROOT="$toolkit_root" \
+    PATH="$sanitized_path" \
+    "$@"
+}
+
+if [ "${1:-}" = "--inside-nix" ]; then
+  shift
+  if [ -z "${IN_NIX_SHELL:-}" ] || [ -z "${TOOLKIT_ROOT:-}" ] || ! command -v toolkit-xtask >/dev/null 2>&1; then
+    echo "toolkit-shell.sh: --inside-nix requires the toolkit nix shell" >&2
+    exit 1
+  fi
+  run_sanitized "$@"
+  exit $?
 fi
 
-# Enter the repo dev shell so toolkit commands see the same pinned toolchain and
-# platform-specific system libraries as the rest of CI.
-exec nix develop --command "$@"
+if [ -n "${IN_NIX_SHELL:-}" ] && [ -n "${TOOLKIT_ROOT:-}" ] && command -v toolkit-xtask >/dev/null 2>&1; then
+  run_sanitized "$@"
+  exit $?
+fi
+
+run_sanitized nix develop --command \
+  "$repo_root/scripts/toolkit-shell.sh" --inside-nix "$@"

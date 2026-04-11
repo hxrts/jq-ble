@@ -349,6 +349,7 @@ pub struct JacquardBleClient {
 }
 
 impl JacquardBleClient {
+    #[must_use = "constructing the BLE client has no effect unless the returned client is used"]
     pub async fn new(local_node_id: NodeId) -> Result<Self, BleClientError> {
         // recursion-exception: constructor delegates to transport assembly with the same semantic name
         let components = BleTransportComponents::new(local_node_id, BleConfig::default()).await?;
