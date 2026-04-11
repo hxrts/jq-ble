@@ -85,6 +85,15 @@ public-type-width:
 dependency-policy:
     {{toolkit_cmd}} check dependency-policy --repo-root . --config policy/toolkit.toml
 
+text-formatting:
+    {{toolkit_cmd}} check text-formatting --repo-root . --config policy/toolkit.toml
+
+workflow-actions:
+    {{toolkit_cmd}} check workflow-actions --repo-root . --config policy/toolkit.toml
+
+workspace-hygiene:
+    {{toolkit_cmd}} check workspace-hygiene --repo-root . --config policy/toolkit.toml
+
 # fast environment sanity checks
 ci-preflight:
     ./scripts/preflight.sh
@@ -156,6 +165,9 @@ ci-dry-run:
     add_step "Limit Constant"          "{{toolkit_cmd}} check limit-constant --repo-root . --config policy/toolkit.toml"
     add_step "Public Type Width"       "{{toolkit_cmd}} check public-type-width --repo-root . --config policy/toolkit.toml"
     add_step "Dependency Policy"       "{{toolkit_cmd}} check dependency-policy --repo-root . --config policy/toolkit.toml"
+    add_step "Text Formatting"         "{{toolkit_cmd}} check text-formatting --repo-root . --config policy/toolkit.toml"
+    add_step "Workflow Actions"        "{{toolkit_cmd}} check workflow-actions --repo-root . --config policy/toolkit.toml"
+    add_step "Workspace Hygiene"       "{{toolkit_cmd}} check workspace-hygiene --repo-root . --config policy/toolkit.toml"
     add_step "Install cargo-dylint"    "{{install_dylint_cmd}}"
     add_step "Dylint Trait Purity"     "env CARGO_INCREMENTAL=0 {{toolkit_dylint}} --toolkit-lint trait_purity --all -- --all-targets"
 

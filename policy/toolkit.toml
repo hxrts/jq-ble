@@ -95,3 +95,18 @@ enabled = true
 manifest_roots = ["crates"]
 require_default_features_false = ["serde", "tokio", "futures"]
 banned_dependencies = []
+
+[checks.text_formatting]
+enabled = true
+include_paths = ["crates", "docs", "policy", "scripts", ".github"]
+exclude_path_parts = ["/target/"]
+
+[checks.workflow_actions]
+enabled = true
+workflow_roots = [".github/workflows"]
+pin_comment_markers = ["pin"]
+
+[checks.workspace_hygiene]
+enabled = true
+include_paths = ["crates"]
+exclude_path_parts = []

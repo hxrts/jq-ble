@@ -58,6 +58,12 @@ jobs:
         run: ./scripts/toolkit-shell.sh toolkit-xtask check public-type-width --repo-root . --config policy/toolkit.toml
       - name: Dependency Policy
         run: ./scripts/toolkit-shell.sh toolkit-xtask check dependency-policy --repo-root . --config policy/toolkit.toml
+      - name: Text Formatting
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check text-formatting --repo-root . --config policy/toolkit.toml
+      - name: Workflow Actions
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check workflow-actions --repo-root . --config policy/toolkit.toml
+      - name: Workspace Hygiene
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check workspace-hygiene --repo-root . --config policy/toolkit.toml
       - name: Install cargo-dylint
         run: ./scripts/toolkit-shell.sh toolkit-install-dylint
       - name: Dylint Trait Purity
