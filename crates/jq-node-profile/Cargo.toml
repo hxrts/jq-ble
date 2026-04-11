@@ -10,9 +10,9 @@ keywords = ["bluetooth", "ble", "jacquard", "mesh", "routing"]
 categories = ["network-programming"]
 
 [dependencies]
-jacquard-core = "0.3.2"
+jacquard-core = { workspace = true }
 serde = { version = "1", default-features = false, features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]
-jacquard-reference-client = "0.3.2"
+jacquard-reference-client = { workspace = true }

@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 futures-util = "0.3"
 hex = "0.4"
-jacquard-core = "0.3.2"
+jacquard-core = { workspace = true }
 jq-client = { path = "../jq-client" }
 jq-node-profile = { path = "../jq-node-profile" }
 serde = { version = "1", default-features = false, features = ["derive"] }
@@ -19,10 +19,10 @@ thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["sync", "rt", "time"] }
 
 [dev-dependencies]
-jacquard-adapter = "0.3.2"
-jacquard-batman = "0.3.2"
-jacquard-core = "0.3.2"
-jacquard-mem-node-profile = "0.3.2"
-jacquard-pathway = "0.3.2"
-jacquard-traits = "0.3.2"
+jacquard-adapter = { workspace = true }
+jacquard-batman = { workspace = true }
+jacquard-core = { workspace = true }
+jacquard-mem-node-profile = { workspace = true }
+jacquard-pathway = { workspace = true }
+jacquard-traits = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }

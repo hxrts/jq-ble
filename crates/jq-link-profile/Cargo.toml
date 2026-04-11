@@ -13,9 +13,9 @@ categories = ["network-programming"]
 blew = { workspace = true }
 bytes = "1"
 futures-util = { version = "0.3", features = ["sink"] }
-jacquard-adapter = "0.3.2"
-jacquard-core = "0.3.2"
-jacquard-traits = "0.3.2"
+jacquard-adapter = { workspace = true }
+jacquard-core = { workspace = true }
+jacquard-traits = { workspace = true }
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "macros"] }
 tokio-stream = "0.1"
@@ -25,4 +25,5 @@ uuid = "1"
 
 [dev-dependencies]
 blew = { workspace = true, features = ["testing"] }
+jacquard-core = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["full"] }

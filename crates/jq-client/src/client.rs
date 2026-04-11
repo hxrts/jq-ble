@@ -318,15 +318,14 @@ where
     async fn wait_after_bridge_error(&mut self) -> bool {
         let notifier = self.bridge.notifier().clone();
         let snapshot = notifier.snapshot();
-        let timeout_ms = duration_ms(self.tick_duration_ms);
-        let notifier_wait = tokio::task::spawn_blocking(move || {
-            notifier.wait_for_change_timeout(snapshot, timeout_ms)
-        });
+        let sleep = tokio::time::sleep(self.tick_duration_ms);
+        tokio::pin!(sleep);
         tokio::select! {
             biased;
             changed = self.shutdown.changed() => changed.is_err() || !*self.shutdown.borrow(),
             command = self.commands.recv() => self.handle_wait_command(command).await,
-            _ = notifier_wait => true,
+            _ = notifier.changed(snapshot) => true,
+            _ = &mut sleep => true,
         }
     }
 
@@ -556,10 +555,6 @@ fn duration_for_tick_hint(round_interval_ms: Duration, ticks: Tick) -> Duration 
     round_interval_ms
         .checked_mul(u32::try_from(ticks.0).unwrap_or(u32::MAX))
         .unwrap_or(Duration::MAX)
-}
-
-fn duration_ms(duration_ms: Duration) -> DurationMs {
-    DurationMs(u32::try_from(duration_ms.as_millis()).unwrap_or(u32::MAX))
 }
 
 fn build_router<Sender>(

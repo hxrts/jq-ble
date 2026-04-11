@@ -9,3 +9,12 @@ resolver = "2"
 
 [workspace.dependencies]
 blew = { version = "0.1.0-alpha.3", git = "https://github.com/mcginty/blew", package = "blew" }
+jacquard-adapter = "0.4.0"
+jacquard-batman = "0.4.0"
+jacquard-core = "0.4.0"
+jacquard-mem-link-profile = "0.4.0"
+jacquard-mem-node-profile = "0.4.0"
+jacquard-pathway = "0.4.0"
+jacquard-reference-client = "0.4.0"
+jacquard-router = "0.4.0"
+jacquard-traits = "0.4.0"

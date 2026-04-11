@@ -239,6 +239,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -405,6 +430,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "either"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
 name = "equivalent"
@@ -661,10 +692,11 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jacquard-adapter"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8db2b0a25c529b0293e24e404098bc363aec765ed4e8752e520b1e382177428b"
+checksum = "57a79ef8ed77a76770280515053068e5e35cb4e00da2892096146bdf67999f83"
 dependencies = [
+ "cfg-if",
  "jacquard-core",
  "jacquard-macros",
  "serde",
@@ -672,9 +704,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-batman"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc9a642f453121116f254485defcf02e18bddaf92a9e0fd396d2951951e9931b"
+checksum = "bd7d46b7e3bf603ac198bfb0599623e99f659d1712bae51f0c7cb8434d8157d0"
 dependencies = [
  "bincode",
  "jacquard-core",
@@ -684,9 +716,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-core"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7678ddd3ccfcc3d10e311bdf184e0ac41bfc4fa898ed68317f775939c9027f3"
+checksum = "3f90cdf59a1790d7a2eabe0024d9f8b24a32dda8882f22d9fc8cb814b08ed025"
 dependencies = [
  "jacquard-macros",
  "serde",
@@ -695,20 +727,21 @@ dependencies = [
 
 [[package]]
 name = "jacquard-macros"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "071b1c513490a1053594725439ed45ad2bba219e6d5763bfc52ea9e8e49129b1"
+checksum = "a348afe388ada48beb7aa189bbdcf6ba17c7e7f561dd47f4a4ba384ea0f398f5"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rust-toolkit-trait-contracts",
  "syn",
 ]
 
 [[package]]
 name = "jacquard-mem-link-profile"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3065047ad3f1de4882d6e7c01c9a9028be58849ba717b996f485140705282d46"
+checksum = "10b7e673b9877d0fd448a0ec58adb77950bbd133c1b71353355a3615502cac31"
 dependencies = [
  "jacquard-adapter",
  "jacquard-core",
@@ -718,9 +751,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-mem-node-profile"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff040539ffc24fc9fb63ccbdf21caac90931e07aec4227ec5309d94f05cc2501"
+checksum = "2f09c1a3aa91a320eda625e2e7cc1d822d9f8633ff690ffd802e64fd3e347af3"
 dependencies = [
  "jacquard-adapter",
  "jacquard-core",
@@ -730,23 +763,25 @@ dependencies = [
 
 [[package]]
 name = "jacquard-pathway"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c955bff50821e7cf7f1e79927ac574af803b028fa364777aac62511cb8de6bd0"
+checksum = "ccae18dd993c28743e78355563b475e6b1bce8383e03c1b21ce36c508860e754"
 dependencies = [
  "bincode",
+ "cfg-if",
  "jacquard-core",
  "jacquard-traits",
  "serde",
  "serde_json",
  "telltale",
+ "telltale-search",
 ]
 
 [[package]]
 name = "jacquard-reference-client"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "167a6bc053920c9d0309645d03c6d0dab31ff439ffbfd1cef556ac34f3647309"
+checksum = "d5fa0cbd35fe4eb4470fc64766a4832a27f8422730ceaa8b74ab6325032855e3"
 dependencies = [
  "jacquard-adapter",
  "jacquard-batman",
@@ -760,9 +795,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-router"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e46b8fd6660323d7dd09b8444494779e6bdc70113ae4274bacc8478a51c88441"
+checksum = "ff9ff48584ecaf17726ff4b4338bfb721e3d2968f91385bf2594eaa381296c87"
 dependencies = [
  "bincode",
  "jacquard-core",
@@ -772,13 +807,14 @@ dependencies = [
 
 [[package]]
 name = "jacquard-traits"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e6696ebf41cc557718927e564e41a3ae10dafa138afe0940932daa8b9398b0f"
+checksum = "0e652e7404f6adbde15e5c09e8f923f649ecc07a70b0c825d861e49f2e73c66f"
 dependencies = [
  "blake3",
  "jacquard-core",
  "jacquard-macros",
+ "rust-toolkit-effects",
 ]
 
 [[package]]
@@ -1229,6 +1265,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "rayon"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1274,6 +1330,23 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "rust-toolkit-effects"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92bf980cce5d65566e1c7a56ec30f512426910a50b9745ea5be2942711f243f4"
+
+[[package]]
+name = "rust-toolkit-trait-contracts"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a393c84177f9cee136bd80973dd56646188899735fd6ba8a28bf94e08a2be23"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "rustc_version"
@@ -1509,9 +1582,9 @@ dependencies = [
 
 [[package]]
 name = "telltale"
-version = "11.3.0"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22edecd4e79005eb01ba010c15484e8363455bbdb87ae46142191f490fae0bed"
+checksum = "2b95757bb7867b3d857af46b7a9538399332ccdecdcc75efabdd0adc31ddee4c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1541,9 +1614,9 @@ dependencies = [
 
 [[package]]
 name = "telltale-language"
-version = "11.3.0"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a11c1e73f56537f9b19298da1caafe1920ed6988f25ff1b4fe5a8dcc7d971fe"
+checksum = "ef2728f83de5c447fe817a9898cef2ea4ae44b694fa5d875e25b5976ab1cca13"
 dependencies = [
  "pest",
  "pest_derive",
@@ -1560,9 +1633,9 @@ dependencies = [
 
 [[package]]
 name = "telltale-machine"
-version = "11.3.0"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "549d1604b13a592a2a1cfd415d97d927615c09f4d2c02f333719f0214b2c0922"
+checksum = "1dfbb9e671dc33c12c563f406ee89bbad6ea44ad49b1ed7f63fd78dab49d1297"
 dependencies = [
  "bincode",
  "cfg-if",
@@ -1580,9 +1653,9 @@ dependencies = [
 
 [[package]]
 name = "telltale-macros"
-version = "11.3.0"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "518140b6ef257f799851d0a5bc98cb17bc41c2436ff1e646390ba4e1881ede0a"
+checksum = "c8723a81a5f1bff4d1a480fb10ed6b19e6d537c0efbdfcb9ff393444cb83c57f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1591,10 +1664,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "telltale-theory"
-version = "11.3.0"
+name = "telltale-search"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95c7421dbf20fbc4238b12d20e3adb35dd496f1f2eb9d7499c854ee88786dd93"
+checksum = "8811746779ca1c40af5681b0fe1db762c06372714a93c9d71936acf246415ab7"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "telltale-theory"
+version = "13.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcd586c67f4d48cb82d7fbab981b421abd1cc8c18f9b0926253affe7c00ffb2b"
 dependencies = [
  "telltale-types",
  "thiserror 1.0.69",
@@ -1602,9 +1685,9 @@ dependencies = [
 
 [[package]]
 name = "telltale-types"
-version = "11.3.0"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "143b74f53d5afe02dca6d2fafd85095b683cae49f7222a42904c7e4eb071cb35"
+checksum = "e475025af362fca8ba80944c5edbd9121dcbf6a3a9cbb06b95fa610a450425e0"
 dependencies = [
  "blake3",
  "fixed",
