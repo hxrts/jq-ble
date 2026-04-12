@@ -25,21 +25,21 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
       - name: Proc Macro Scope
-        run: ./scripts/toolkit-shell.sh toolkit-xtask check proc-macro-scope --repo-root . --config policy/toolkit.toml
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check proc-macro-scope --repo-root . --config toolkit/toolkit.toml
       - name: Docs Semantic Drift
-        run: ./scripts/toolkit-shell.sh toolkit-xtask check docs-semantic-drift --repo-root . --config policy/toolkit.toml
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check docs-semantic-drift --repo-root . --config toolkit/toolkit.toml
       - name: Crate Root Policy
-        run: ./scripts/toolkit-shell.sh toolkit-xtask check crate-root-policy --repo-root . --config policy/toolkit.toml
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check crate-root-policy --repo-root . --config toolkit/toolkit.toml
       - name: Ignored Result
-        run: ./scripts/toolkit-shell.sh toolkit-xtask check ignored-result --repo-root . --config policy/toolkit.toml
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check ignored-result --repo-root . --config toolkit/toolkit.toml
       - name: Unsafe Boundary
-        run: ./scripts/toolkit-shell.sh toolkit-xtask check unsafe-boundary --repo-root . --config policy/toolkit.toml
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check unsafe-boundary --repo-root . --config toolkit/toolkit.toml
       - name: Public Type Width
-        run: ./scripts/toolkit-shell.sh toolkit-xtask check public-type-width --repo-root . --config policy/toolkit.toml
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check public-type-width --repo-root . --config toolkit/toolkit.toml
       - name: Dependency Policy
-        run: ./scripts/toolkit-shell.sh toolkit-xtask check dependency-policy --repo-root . --config policy/toolkit.toml
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check dependency-policy --repo-root . --config toolkit/toolkit.toml
       - name: Text Formatting
-        run: ./scripts/toolkit-shell.sh toolkit-xtask check text-formatting --repo-root . --config policy/toolkit.toml
+        run: ./scripts/toolkit-shell.sh toolkit-xtask check text-formatting --repo-root . --config toolkit/toolkit.toml
       - name: Install cargo-dylint
         run: ./scripts/toolkit-shell.sh toolkit-install-dylint
       - name: Dylint Trait Purity

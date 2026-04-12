@@ -54,7 +54,7 @@ This repo uses [`hxrts/toolkit`](https://github.com/hxrts/toolkit) as a Nix flak
 - A pinned nightly rustfmt config (`toolkit-fmt`)
 - Clippy wrapper (`toolkit-clippy`)
 - Dylint lints (`toolkit-dylint`) — currently `trait_purity` is active
-- `toolkit-xtask` for policy checks driven by `policy/toolkit.toml`
+- `toolkit-xtask` for policy checks driven by `toolkit/toolkit.toml`
 
 The active toolkit checks are: `proc_macro_scope`, `docs_semantic_drift`, `crate_root_policy`, `ignored_result`, `unsafe_boundary`, `public_type_width`, `dependency_policy`, `text_formatting`.
 
@@ -62,7 +62,7 @@ All checks must appear in both `justfile` (individual targets + `ci-dry-run` ste
 
 ## Policy
 
-Repo-specific lint and enforcement configuration lives in `policy/toolkit.toml`. Generic rules belong in the shared toolkit (flake input); `jq-ble`-specific rules go here.
+Repo-specific lint and enforcement configuration lives in `toolkit/toolkit.toml`. Generic rules belong in the shared toolkit (flake input); `jq-ble`-specific rules go here.
 
 ## Editing Expectations
 

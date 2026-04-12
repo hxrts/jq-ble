@@ -5,7 +5,7 @@ exclude_crates = []
 [bundles.rust_base]
 enabled = true
 rust_roots = ["crates"]
-docs_roots = ["docs", "policy"]
+docs_roots = ["docs", "toolkit"]
 
 [checks.proc_macro_scope]
 enabled = true
@@ -39,7 +39,7 @@ exclude_files = [
 
 [checks.docs_semantic_drift]
 enabled = true
-docs_roots = ["docs", "policy", "scripts"]
+docs_roots = ["docs", "toolkit", "scripts"]
 manifest_path = "Cargo.toml"
 planned_crates = []
 
@@ -71,5 +71,5 @@ banned_dependencies = []
 
 [checks.text_formatting]
 enabled = true
-include_paths = ["crates", "docs", "policy", "scripts", ".github"]
+include_paths = ["crates", "docs", "toolkit", "scripts", ".github"]
 exclude_path_parts = ["/target/"]
