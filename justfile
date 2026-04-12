@@ -24,7 +24,7 @@ test:
 
 # run clippy lints
 lint:
-    cargo clippy --workspace --all-targets -- -D warnings
+    nix develop --command cargo clippy --workspace --all-targets -- -D warnings
 
 # format code (uses the toolkit-owned nightly rustfmt policy)
 fmt:
@@ -153,9 +153,6 @@ ci-dry-run:
 # enter the pinned toolkit shell for nightly formatter and dylint commands
 toolkit-shell:
     {{toolkit_shell_cmd}} bash -lc 'exec "${SHELL:-bash}" -l'
-
-# backwards-compatible alias for the toolkit shell
-nightly-shell: toolkit-shell
 
 install-dylint:
     {{install_dylint_cmd}}
