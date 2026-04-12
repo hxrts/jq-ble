@@ -61,6 +61,42 @@ dependency-policy:
 text-formatting:
     {{toolkit_cmd}} check text-formatting --repo-root . --config toolkit/toolkit.toml
 
+result-must-use:
+    {{toolkit_cmd}} check result-must-use --repo-root . --config toolkit/toolkit.toml
+
+test-boundaries:
+    {{toolkit_cmd}} check test-boundaries --repo-root . --config toolkit/toolkit.toml
+
+docs-link-check:
+    {{toolkit_cmd}} check docs-link-check --repo-root . --config toolkit/toolkit.toml
+
+workspace-hygiene:
+    {{toolkit_cmd}} check workspace-hygiene --repo-root . --config toolkit/toolkit.toml
+
+bool-param:
+    {{toolkit_cmd}} check bool-param --repo-root . --config toolkit/toolkit.toml
+
+must-use-public-return:
+    {{toolkit_cmd}} check must-use-public-return --repo-root . --config toolkit/toolkit.toml
+
+assert-shape:
+    {{toolkit_cmd}} check assert-shape --repo-root . --config toolkit/toolkit.toml
+
+drop-side-effects:
+    {{toolkit_cmd}} check drop-side-effects --repo-root . --config toolkit/toolkit.toml
+
+recursion-guard:
+    {{toolkit_cmd}} check recursion-guard --repo-root . --config toolkit/toolkit.toml
+
+naming-units:
+    {{toolkit_cmd}} check naming-units --repo-root . --config toolkit/toolkit.toml
+
+limit-constant:
+    {{toolkit_cmd}} check limit-constant --repo-root . --config toolkit/toolkit.toml
+
+workflow-actions:
+    {{toolkit_cmd}} check workflow-actions --repo-root . --config toolkit/toolkit.toml
+
 # fast environment sanity checks
 ci-preflight:
     ./scripts/preflight.sh
@@ -123,6 +159,18 @@ ci-dry-run:
     add_step "Public Type Width"       "{{toolkit_cmd}} check public-type-width --repo-root . --config toolkit/toolkit.toml"
     add_step "Dependency Policy"       "{{toolkit_cmd}} check dependency-policy --repo-root . --config toolkit/toolkit.toml"
     add_step "Text Formatting"         "{{toolkit_cmd}} check text-formatting --repo-root . --config toolkit/toolkit.toml"
+    add_step "Result Must Use"         "{{toolkit_cmd}} check result-must-use --repo-root . --config toolkit/toolkit.toml"
+    add_step "Test Boundaries"         "{{toolkit_cmd}} check test-boundaries --repo-root . --config toolkit/toolkit.toml"
+    add_step "Docs Link Check"         "{{toolkit_cmd}} check docs-link-check --repo-root . --config toolkit/toolkit.toml"
+    add_step "Workspace Hygiene"       "{{toolkit_cmd}} check workspace-hygiene --repo-root . --config toolkit/toolkit.toml"
+    add_step "Bool Param"              "{{toolkit_cmd}} check bool-param --repo-root . --config toolkit/toolkit.toml"
+    add_step "Must Use Public Return"  "{{toolkit_cmd}} check must-use-public-return --repo-root . --config toolkit/toolkit.toml"
+    add_step "Assert Shape"            "{{toolkit_cmd}} check assert-shape --repo-root . --config toolkit/toolkit.toml"
+    add_step "Drop Side Effects"       "{{toolkit_cmd}} check drop-side-effects --repo-root . --config toolkit/toolkit.toml"
+    add_step "Recursion Guard"         "{{toolkit_cmd}} check recursion-guard --repo-root . --config toolkit/toolkit.toml"
+    add_step "Naming Units"            "{{toolkit_cmd}} check naming-units --repo-root . --config toolkit/toolkit.toml"
+    add_step "Limit Constant"          "{{toolkit_cmd}} check limit-constant --repo-root . --config toolkit/toolkit.toml"
+    add_step "Workflow Actions"        "{{toolkit_cmd}} check workflow-actions --repo-root . --config toolkit/toolkit.toml"
     add_step "Install cargo-dylint"    "{{install_dylint_cmd}}"
     add_step "Dylint Trait Purity"     "env CARGO_INCREMENTAL=0 {{toolkit_dylint}} --toolkit-lint trait_purity --all -- --all-targets"
 
