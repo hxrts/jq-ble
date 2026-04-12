@@ -9,7 +9,7 @@ resolve_pinned_toolkit_root() {
     return 1
   fi
 
-  local toolkit_rev metadata_json archive_path
+  local toolkit_rev metadata_json archive_path cache_root cache_tmp
   toolkit_rev="$(
     perl -0ne '
       if (/"toolkit"\s*:\s*\{.*?"locked"\s*:\s*\{.*?"rev"\s*:\s*"([0-9a-f]+)"/s) {
@@ -36,7 +36,18 @@ resolve_pinned_toolkit_root() {
     return 1
   fi
 
-  printf '%s\n' "$archive_path"
+  cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/toolkit/source-cache/$toolkit_rev"
+  if [ ! -f "$cache_root/xtask/Cargo.toml" ]; then
+    cache_tmp="${cache_root}.tmp.$$"
+    mkdir -p "$(dirname "$cache_root")"
+    rm -rf "$cache_tmp"
+    cp -R "$archive_path" "$cache_tmp"
+    chmod -R u+w "$cache_tmp" || true
+    rm -rf "$cache_root"
+    mv "$cache_tmp" "$cache_root"
+  fi
+
+  printf '%s\n' "$cache_root"
 }
 
 sanitize_path() {

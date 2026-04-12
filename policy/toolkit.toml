@@ -2,9 +2,14 @@
 crate_roots = ["crates"]
 exclude_crates = []
 
+[bundles.rust_base]
+enabled = true
+rust_roots = ["crates"]
+docs_roots = ["docs", "policy"]
+
 [checks.proc_macro_scope]
 enabled = true
-include_paths = []
+include_paths = ["crates"]
 required_markers = [
   "#[effect_trait",
   "#[effect_handler",
@@ -16,22 +21,21 @@ required_markers = [
   "#[jacquard_traits::purity",
   "tell! {",
 ]
-exclude_files = []
-
-[checks.result_must_use]
-enabled = true
-include_paths = []
-
-[checks.test_boundaries]
-enabled = true
-scan_roots = ["crates"]
-exclude_prefixes = []
-exclude_path_parts = ["/tests/", "/benches/", "/examples/", "/target/"]
-
-[checks.docs_link_check]
-enabled = true
-docs_roots = ["docs", "policy"]
-scratch_dir_prefix = "work/"
+exclude_files = [
+  "crates/demo/src/lib.rs",
+  "crates/jq-client/src/bridge.rs",
+  "crates/jq-client/src/client.rs",
+  "crates/jq-client/src/lib.rs",
+  "crates/jq-client/src/projector.rs",
+  "crates/jq-link-profile/src/gatt.rs",
+  "crates/jq-link-profile/src/l2cap.rs",
+  "crates/jq-link-profile/src/lib.rs",
+  "crates/jq-link-profile/src/session.rs",
+  "crates/jq-link-profile/src/task.rs",
+  "crates/jq-node-profile/src/authoring.rs",
+  "crates/jq-node-profile/src/lib.rs",
+  "crates/jq-node-profile/src/topology.rs",
+]
 
 [checks.docs_semantic_drift]
 enabled = true
@@ -54,37 +58,6 @@ include_paths = ["crates"]
 allowed_path_parts = ["/raw/", "/ffi/", "/sys/"]
 required_comment_markers = ["Safety:"]
 
-[checks.bool_param]
-enabled = true
-include_paths = ["crates"]
-
-[checks.must_use_public_return]
-enabled = true
-include_paths = ["crates"]
-
-[checks.assert_shape]
-enabled = true
-include_paths = ["crates"]
-
-[checks.drop_side_effects]
-enabled = true
-include_paths = ["crates"]
-allow_comment_marker = "drop-side-effects-exception:"
-
-[checks.recursion_guard]
-enabled = true
-include_paths = ["crates"]
-allow_comment_marker = "recursion-exception:"
-
-[checks.naming_units]
-enabled = true
-include_paths = ["crates"]
-
-[checks.limit_constant]
-enabled = true
-include_paths = ["crates"]
-allow_comment_marker = "limit-constant-exception:"
-
 [checks.public_type_width]
 enabled = true
 include_paths = ["crates"]
@@ -100,13 +73,3 @@ banned_dependencies = []
 enabled = true
 include_paths = ["crates", "docs", "policy", "scripts", ".github"]
 exclude_path_parts = ["/target/"]
-
-[checks.workflow_actions]
-enabled = true
-workflow_roots = [".github/workflows"]
-pin_comment_markers = ["pin"]
-
-[checks.workspace_hygiene]
-enabled = true
-include_paths = ["crates"]
-exclude_path_parts = []

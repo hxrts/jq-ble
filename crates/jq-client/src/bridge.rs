@@ -32,11 +32,13 @@ pub enum BleBridgeError {
 }
 
 pub trait BleBridgeRouter {
+    #[must_use = "ignoring router observation ingestion failures can desynchronize bridge state"]
     fn ingest_transport_observation(
         &mut self,
         observation: &TransportObservation,
     ) -> Result<(), RouteError>;
 
+    #[must_use = "ignoring the round result loses router progress and bridge bookkeeping"]
     fn advance_round(&mut self) -> Result<RouterRoundOutcome, RouteError>;
 }
 
@@ -60,7 +62,10 @@ where
 }
 
 pub trait BleBridgeIo {
+    #[must_use = "ignoring ingress draining failures can drop transport observations"]
     fn drain_raw_ingress(&mut self) -> Result<Vec<TransportIngressEvent>, TransportError>;
+
+    #[must_use = "ignoring outbound flush results can lose transport delivery failures"]
     fn flush_outbound(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<usize, TransportError>> + Send + '_>>;
