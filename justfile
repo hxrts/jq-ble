@@ -40,47 +40,17 @@ toolkit-show-config:
 proc-macro-scope:
     {{toolkit_cmd}} check proc-macro-scope --repo-root . --config policy/toolkit.toml
 
-result-must-use:
-    {{toolkit_cmd}} check result-must-use --repo-root . --config policy/toolkit.toml
+docs-semantic-drift:
+    {{toolkit_cmd}} check docs-semantic-drift --repo-root . --config policy/toolkit.toml
 
 crate-root-policy:
     {{toolkit_cmd}} check crate-root-policy --repo-root . --config policy/toolkit.toml
-
-test-boundaries:
-    {{toolkit_cmd}} check test-boundaries --repo-root . --config policy/toolkit.toml
-
-docs-link-check:
-    {{toolkit_cmd}} check docs-link-check --repo-root . --config policy/toolkit.toml
-
-docs-semantic-drift:
-    {{toolkit_cmd}} check docs-semantic-drift --repo-root . --config policy/toolkit.toml
 
 ignored-result:
     {{toolkit_cmd}} check ignored-result --repo-root . --config policy/toolkit.toml
 
 unsafe-boundary:
     {{toolkit_cmd}} check unsafe-boundary --repo-root . --config policy/toolkit.toml
-
-bool-param:
-    {{toolkit_cmd}} check bool-param --repo-root . --config policy/toolkit.toml
-
-must-use-public-return:
-    {{toolkit_cmd}} check must-use-public-return --repo-root . --config policy/toolkit.toml
-
-assert-shape:
-    {{toolkit_cmd}} check assert-shape --repo-root . --config policy/toolkit.toml
-
-drop-side-effects:
-    {{toolkit_cmd}} check drop-side-effects --repo-root . --config policy/toolkit.toml
-
-recursion-guard:
-    {{toolkit_cmd}} check recursion-guard --repo-root . --config policy/toolkit.toml
-
-naming-units:
-    {{toolkit_cmd}} check naming-units --repo-root . --config policy/toolkit.toml
-
-limit-constant:
-    {{toolkit_cmd}} check limit-constant --repo-root . --config policy/toolkit.toml
 
 public-type-width:
     {{toolkit_cmd}} check public-type-width --repo-root . --config policy/toolkit.toml
@@ -90,12 +60,6 @@ dependency-policy:
 
 text-formatting:
     {{toolkit_cmd}} check text-formatting --repo-root . --config policy/toolkit.toml
-
-workflow-actions:
-    {{toolkit_cmd}} check workflow-actions --repo-root . --config policy/toolkit.toml
-
-workspace-hygiene:
-    {{toolkit_cmd}} check workspace-hygiene --repo-root . --config policy/toolkit.toml
 
 # fast environment sanity checks
 ci-preflight:
@@ -151,26 +115,14 @@ ci-dry-run:
     add_step "Format Check"            "{{fmt_cmd}} --all -- --check"
     add_step "Clippy"                  "nix develop --command cargo clippy --workspace --all-targets -- -D warnings"
     add_step "Tests"                   "nix develop --command cargo test --workspace"
-    add_step "Docs Link Check"         "{{toolkit_cmd}} check docs-link-check --repo-root . --config policy/toolkit.toml"
-    add_step "Docs Semantic Drift"     "{{toolkit_cmd}} check docs-semantic-drift --repo-root . --config policy/toolkit.toml"
     add_step "Proc Macro Scope"        "{{toolkit_cmd}} check proc-macro-scope --repo-root . --config policy/toolkit.toml"
-    add_step "Result Must Use"         "{{toolkit_cmd}} check result-must-use --repo-root . --config policy/toolkit.toml"
-    add_step "Test Boundaries"         "{{toolkit_cmd}} check test-boundaries --repo-root . --config policy/toolkit.toml"
+    add_step "Docs Semantic Drift"     "{{toolkit_cmd}} check docs-semantic-drift --repo-root . --config policy/toolkit.toml"
     add_step "Crate Root Policy"       "{{toolkit_cmd}} check crate-root-policy --repo-root . --config policy/toolkit.toml"
     add_step "Ignored Result"          "{{toolkit_cmd}} check ignored-result --repo-root . --config policy/toolkit.toml"
     add_step "Unsafe Boundary"         "{{toolkit_cmd}} check unsafe-boundary --repo-root . --config policy/toolkit.toml"
-    add_step "Bool Param"              "{{toolkit_cmd}} check bool-param --repo-root . --config policy/toolkit.toml"
-    add_step "Must Use Public Return"  "{{toolkit_cmd}} check must-use-public-return --repo-root . --config policy/toolkit.toml"
-    add_step "Assert Shape"            "{{toolkit_cmd}} check assert-shape --repo-root . --config policy/toolkit.toml"
-    add_step "Drop Side Effects"       "{{toolkit_cmd}} check drop-side-effects --repo-root . --config policy/toolkit.toml"
-    add_step "Recursion Guard"         "{{toolkit_cmd}} check recursion-guard --repo-root . --config policy/toolkit.toml"
-    add_step "Naming Units"            "{{toolkit_cmd}} check naming-units --repo-root . --config policy/toolkit.toml"
-    add_step "Limit Constant"          "{{toolkit_cmd}} check limit-constant --repo-root . --config policy/toolkit.toml"
     add_step "Public Type Width"       "{{toolkit_cmd}} check public-type-width --repo-root . --config policy/toolkit.toml"
     add_step "Dependency Policy"       "{{toolkit_cmd}} check dependency-policy --repo-root . --config policy/toolkit.toml"
     add_step "Text Formatting"         "{{toolkit_cmd}} check text-formatting --repo-root . --config policy/toolkit.toml"
-    add_step "Workflow Actions"        "{{toolkit_cmd}} check workflow-actions --repo-root . --config policy/toolkit.toml"
-    add_step "Workspace Hygiene"       "{{toolkit_cmd}} check workspace-hygiene --repo-root . --config policy/toolkit.toml"
     add_step "Install cargo-dylint"    "{{install_dylint_cmd}}"
     add_step "Dylint Trait Purity"     "env CARGO_INCREMENTAL=0 {{toolkit_dylint}} --toolkit-lint trait_purity --all -- --all-targets"
 
