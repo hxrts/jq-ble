@@ -5,11 +5,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
 resolve_pinned_toolkit_root() {
-  if ! command -v nix >/dev/null 2>&1 || [ ! -f "$repo_root/flake.lock" ]; then
+  if [ ! -f "$repo_root/flake.lock" ]; then
     return 1
   fi
 
-  local toolkit_rev metadata_json archive_path cache_root cache_tmp
+  local toolkit_rev archive_path metadata_json cache_root cache_tmp
   toolkit_rev="$(
     perl -0ne '
       if (/"toolkit"\s*:\s*\{.*?"locked"\s*:\s*\{.*?"rev"\s*:\s*"([0-9a-f]+)"/s) {
@@ -21,19 +21,30 @@ resolve_pinned_toolkit_root() {
     return 1
   fi
 
-  metadata_json="$(nix flake metadata --json "github:hxrts/toolkit/$toolkit_rev")" || return 1
-  archive_path="$(
-    printf '%s' "$metadata_json" | perl -0ne '
-      while (/"path"\s*:\s*"([^"]+)"/g) {
-        $path = $1;
-      }
-      END {
-        print $path if defined $path;
-      }
-    '
-  )"
+  archive_path="${TOOLKIT_ROOT:-}"
+  if [ -n "$archive_path" ] && [ ! -f "$archive_path/xtask/Cargo.toml" ]; then
+    archive_path=""
+  fi
+
   if [ -z "$archive_path" ]; then
-    return 1
+    if ! command -v nix >/dev/null 2>&1; then
+      return 1
+    fi
+
+    metadata_json="$(nix flake metadata --json "github:hxrts/toolkit/$toolkit_rev")" || return 1
+    archive_path="$(
+      printf '%s' "$metadata_json" | perl -0ne '
+        while (/"path"\s*:\s*"([^"]+)"/g) {
+          $path = $1;
+        }
+        END {
+          print $path if defined $path;
+        }
+      '
+    )"
+    if [ -z "$archive_path" ]; then
+      return 1
+    fi
   fi
 
   cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/toolkit/source-cache/$toolkit_rev"
