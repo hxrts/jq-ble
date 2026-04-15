@@ -16,3 +16,4 @@ thiserror = "2"
 
 [dev-dependencies]
 jacquard-reference-client = { workspace = true }
+jacquard-testkit = { workspace = true }

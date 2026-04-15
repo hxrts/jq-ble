@@ -20,7 +20,7 @@ tokio = { version = "1", default-features = false, features = ["sync", "rt", "ti
 
 [dev-dependencies]
 jacquard-adapter = { workspace = true }
-jacquard-batman = { workspace = true }
+jacquard-batman-bellman = { workspace = true }
 jacquard-core = { workspace = true }
 jacquard-mem-node-profile = { workspace = true }
 jacquard-pathway = { workspace = true }

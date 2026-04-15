@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use jacquard_adapter::{TransportIngressClass, dispatch_mailbox};
-use jacquard_batman::BATMAN_ENGINE_ID;
+use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     Configuration, ControllerId, Environment, FactSourceClass, LinkBuilder, LinkEndpoint,
     LinkRuntimeState, NodeId, Observation, OriginAuthenticationClass, PartitionRecoveryClass,
@@ -41,7 +41,7 @@ fn local_only_topology() -> Observation<Configuration> {
                         ble_endpoint(1, TransportKind::BleGatt),
                         Tick(1),
                     ),
-                    &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                    &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                 )
                 .build(),
             )]),
@@ -74,7 +74,7 @@ fn published_topology() -> Observation<Configuration> {
                             ble_endpoint(1, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -86,24 +86,39 @@ fn published_topology() -> Observation<Configuration> {
                             ble_endpoint(2, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                     )
                     .build(),
                 ),
             ]),
-            links: BTreeMap::from([((local_node_id, remote_node_id), {
-                let mut link = LinkBuilder::new(ble_endpoint(2, TransportKind::BleGatt))
-                    .with_profile(
-                        jacquard_core::DurationMs(25),
-                        RepairCapability::TransportRetransmit,
-                        PartitionRecoveryClass::LocalReconnect,
-                    )
-                    .with_runtime_state(LinkRuntimeState::Active)
-                    .build();
-                link.state.delivery_confidence_permille =
-                    jacquard_core::Belief::certain(RatioPermille(950), Tick(1));
-                link
-            })]),
+            links: BTreeMap::from([
+                ((local_node_id, remote_node_id), {
+                    let mut link = LinkBuilder::new(ble_endpoint(2, TransportKind::BleGatt))
+                        .with_profile(
+                            jacquard_core::DurationMs(25),
+                            RepairCapability::TransportRetransmit,
+                            PartitionRecoveryClass::LocalReconnect,
+                        )
+                        .with_runtime_state(LinkRuntimeState::Active)
+                        .build();
+                    link.state.delivery_confidence_permille =
+                        jacquard_core::Belief::certain(RatioPermille(950), Tick(1));
+                    link
+                }),
+                ((remote_node_id, local_node_id), {
+                    let mut link = LinkBuilder::new(ble_endpoint(1, TransportKind::BleGatt))
+                        .with_profile(
+                            jacquard_core::DurationMs(25),
+                            RepairCapability::TransportRetransmit,
+                            PartitionRecoveryClass::LocalReconnect,
+                        )
+                        .with_runtime_state(LinkRuntimeState::Active)
+                        .build();
+                    link.state.delivery_confidence_permille =
+                        jacquard_core::Belief::certain(RatioPermille(950), Tick(1));
+                    link
+                }),
+            ]),
             environment: Environment {
                 reachable_neighbor_count: 1,
                 churn_permille: RatioPermille(0),
@@ -134,7 +149,7 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                             ble_endpoint(1, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -146,7 +161,7 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                             ble_endpoint(2, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -158,7 +173,7 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                             ble_endpoint(3, TransportKind::BleL2cap),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -170,7 +185,7 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                             ble_endpoint(4, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -179,6 +194,17 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                 (
                     (local_node_id, relay_left),
                     LinkBuilder::new(ble_endpoint(2, TransportKind::BleGatt))
+                        .with_profile(
+                            jacquard_core::DurationMs(25),
+                            RepairCapability::TransportRetransmit,
+                            PartitionRecoveryClass::LocalReconnect,
+                        )
+                        .with_runtime_state(LinkRuntimeState::Active)
+                        .build(),
+                ),
+                (
+                    (relay_left, local_node_id),
+                    LinkBuilder::new(ble_endpoint(1, TransportKind::BleGatt))
                         .with_profile(
                             jacquard_core::DurationMs(25),
                             RepairCapability::TransportRetransmit,
@@ -199,6 +225,17 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                         .build(),
                 ),
                 (
+                    (remote_node_id, relay_left),
+                    LinkBuilder::new(ble_endpoint(2, TransportKind::BleGatt))
+                        .with_profile(
+                            jacquard_core::DurationMs(25),
+                            RepairCapability::TransportRetransmit,
+                            PartitionRecoveryClass::LocalReconnect,
+                        )
+                        .with_runtime_state(LinkRuntimeState::Active)
+                        .build(),
+                ),
+                (
                     (local_node_id, relay_right),
                     LinkBuilder::new(ble_endpoint(3, TransportKind::BleL2cap))
                         .with_profile(
@@ -210,8 +247,30 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                         .build(),
                 ),
                 (
+                    (relay_right, local_node_id),
+                    LinkBuilder::new(ble_endpoint(1, TransportKind::BleL2cap))
+                        .with_profile(
+                            jacquard_core::DurationMs(25),
+                            RepairCapability::TransportRetransmit,
+                            PartitionRecoveryClass::LocalReconnect,
+                        )
+                        .with_runtime_state(LinkRuntimeState::Active)
+                        .build(),
+                ),
+                (
                     (relay_right, remote_node_id),
                     LinkBuilder::new(ble_endpoint(4, TransportKind::BleL2cap))
+                        .with_profile(
+                            jacquard_core::DurationMs(25),
+                            RepairCapability::TransportRetransmit,
+                            PartitionRecoveryClass::LocalReconnect,
+                        )
+                        .with_runtime_state(LinkRuntimeState::Active)
+                        .build(),
+                ),
+                (
+                    (remote_node_id, relay_right),
+                    LinkBuilder::new(ble_endpoint(3, TransportKind::BleL2cap))
                         .with_profile(
                             jacquard_core::DurationMs(25),
                             RepairCapability::TransportRetransmit,

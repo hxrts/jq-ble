@@ -16,7 +16,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use jacquard_adapter::opaque_endpoint;
-use jacquard_batman::{BATMAN_ENGINE_ID, BatmanEngine};
+use jacquard_batman_bellman::{BATMAN_BELLMAN_ENGINE_ID, BatmanBellmanEngine};
 use jacquard_core::{
     ByteCount, Configuration, ConnectivityPosture, ControllerId, DestinationId, DurationMs,
     Environment, FactSourceClass, HealthScore, HoldFallbackPolicy, IdentityAssuranceClass, Limit,
@@ -586,7 +586,7 @@ where
     );
     router.register_engine(Box::new(pathway_engine))?;
     // Batman provides opportunistic flooding-based fallback when Pathway has no explicit path.
-    router.register_engine(Box::new(BatmanEngine::new(
+    router.register_engine(Box::new(BatmanBellmanEngine::new(
         local_node_id,
         transport,
         effects,
@@ -607,7 +607,7 @@ fn initial_topology(local_node_id: NodeId, observed_at_tick: Tick) -> Observatio
             endpoint,
             observed_at_tick,
         ),
-        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
     )
     .build();
 

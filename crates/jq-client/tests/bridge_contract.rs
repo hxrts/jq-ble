@@ -25,7 +25,9 @@ fn published_reference_client_builder_matches_ble_bridge_assumptions() {
     let network = SharedInMemoryNetwork::default();
 
     let mut client =
-        ClientBuilder::pathway_and_batman(local_node_id, topology, network, Tick(1)).build();
+        ClientBuilder::pathway_and_batman_bellman(local_node_id, topology, network, Tick(1))
+            .build()
+            .expect("build published client");
     let mut bound = client.bind();
 
     assert_uses_shared_router_contracts(bound.router());

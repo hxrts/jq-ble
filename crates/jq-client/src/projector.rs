@@ -11,7 +11,7 @@ use jacquard_adapter::{
     ObservedLink, ObservedNode, ObservedRoute, ObservedRouteShape,
     TopologyProjector as AdapterTopologyProjector,
 };
-use jacquard_batman::BATMAN_ENGINE_ID;
+use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     Configuration, ControllerId, DestinationId, FactSourceClass, Link, LinkRuntimeState, Node,
     NodeId, Observation, OriginAuthenticationClass, RouteShapeVisibility, RouterRoundOutcome,
@@ -180,7 +180,7 @@ impl TopologyProjector {
                 endpoint.clone(),
                 observed_at_tick,
             ),
-            &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+            &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
         )
         .build();
         self.topology.value.nodes.insert(remote_node_id, node);

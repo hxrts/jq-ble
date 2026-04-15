@@ -18,7 +18,7 @@ use jacquard_core::{
     Observation, OriginAuthenticationClass, RatioPermille, RouteEpoch, RoutingEvidenceClass, Tick,
     TransportError, TransportIngressEvent, TransportKind,
 };
-use jacquard_reference_client::topology;
+use jacquard_testkit::topology;
 use jacquard_traits::{TransportSenderEffects, effect_handler};
 use jq_client::BleBridgeIo;
 
@@ -135,19 +135,27 @@ pub fn published_topology() -> Observation<Configuration> {
             nodes: BTreeMap::from([
                 (
                     NodeId([1; 32]),
-                    topology::node(1).pathway_and_batman().build(),
+                    topology::node(1).pathway_and_batman_bellman().build(),
                 ),
                 (
                     NodeId([2; 32]),
-                    topology::node(2).pathway_and_batman().build(),
+                    topology::node(2).pathway_and_batman_bellman().build(),
                 ),
             ]),
-            links: BTreeMap::from([(
-                (NodeId([1; 32]), NodeId([2; 32])),
-                topology::link(2)
-                    .with_confidence(RatioPermille(900))
-                    .build(),
-            )]),
+            links: BTreeMap::from([
+                (
+                    (NodeId([1; 32]), NodeId([2; 32])),
+                    topology::link(2)
+                        .with_confidence(RatioPermille(900))
+                        .build(),
+                ),
+                (
+                    (NodeId([2; 32]), NodeId([1; 32])),
+                    topology::link(1)
+                        .with_confidence(RatioPermille(900))
+                        .build(),
+                ),
+            ]),
             environment: Environment {
                 reachable_neighbor_count: 1,
                 churn_permille: RatioPermille(0),
@@ -170,7 +178,7 @@ pub fn local_only_topology(local_node_id: NodeId) -> Observation<Configuration> 
             epoch: RouteEpoch(1),
             nodes: BTreeMap::from([(
                 local_node_id,
-                topology::node(1).pathway_and_batman().build(),
+                topology::node(1).pathway_and_batman_bellman().build(),
             )]),
             links: BTreeMap::new(),
             environment: Environment {

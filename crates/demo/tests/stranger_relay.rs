@@ -24,7 +24,7 @@ use jacquard_adapter::{
     DispatchReceiver, DispatchSender, TransportIngressClass, TransportIngressNotifier,
     dispatch_mailbox, transport_ingress_mailbox,
 };
-use jacquard_batman::BATMAN_ENGINE_ID;
+use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     ByteCount, Configuration, ControllerId, Environment, FactSourceClass, LinkBuilder,
     LinkEndpoint, LinkRuntimeState, NodeId, Observation, OriginAuthenticationClass,
@@ -441,7 +441,7 @@ fn local_only_topology(local_node_id: NodeId) -> Observation<Configuration> {
                         ble_endpoint(node_byte(local_node_id), TransportKind::BleGatt),
                         Tick(1),
                     ),
-                    &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                    &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                 )
                 .build(),
             )]),
@@ -515,7 +515,7 @@ fn route_capable_node(id: NodeId) -> jacquard_core::Node {
             ble_endpoint(node_byte(id), TransportKind::BleGatt),
             Tick(1),
         ),
-        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
     )
     .build()
 }
@@ -550,7 +550,7 @@ fn direct_peer_topology(
                             ble_endpoint(node_byte(local_node_id), TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -562,27 +562,45 @@ fn direct_peer_topology(
                             ble_endpoint(node_byte(remote_node_id), TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_ENGINE_ID],
+                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
                     )
                     .build(),
                 ),
             ]),
-            links: BTreeMap::from([((local_node_id, remote_node_id), {
-                let mut link = LinkBuilder::new(ble_endpoint(
-                    node_byte(remote_node_id),
-                    TransportKind::BleGatt,
-                ))
-                .with_profile(
-                    jacquard_core::DurationMs(25),
-                    RepairCapability::TransportRetransmit,
-                    PartitionRecoveryClass::LocalReconnect,
-                )
-                .with_runtime_state(LinkRuntimeState::Active)
-                .build();
-                link.state.delivery_confidence_permille =
-                    jacquard_core::Belief::certain(RatioPermille(950), Tick(1));
-                link
-            })]),
+            links: BTreeMap::from([
+                ((local_node_id, remote_node_id), {
+                    let mut link = LinkBuilder::new(ble_endpoint(
+                        node_byte(remote_node_id),
+                        TransportKind::BleGatt,
+                    ))
+                    .with_profile(
+                        jacquard_core::DurationMs(25),
+                        RepairCapability::TransportRetransmit,
+                        PartitionRecoveryClass::LocalReconnect,
+                    )
+                    .with_runtime_state(LinkRuntimeState::Active)
+                    .build();
+                    link.state.delivery_confidence_permille =
+                        jacquard_core::Belief::certain(RatioPermille(950), Tick(1));
+                    link
+                }),
+                ((remote_node_id, local_node_id), {
+                    let mut link = LinkBuilder::new(ble_endpoint(
+                        node_byte(local_node_id),
+                        TransportKind::BleGatt,
+                    ))
+                    .with_profile(
+                        jacquard_core::DurationMs(25),
+                        RepairCapability::TransportRetransmit,
+                        PartitionRecoveryClass::LocalReconnect,
+                    )
+                    .with_runtime_state(LinkRuntimeState::Active)
+                    .build();
+                    link.state.delivery_confidence_permille =
+                        jacquard_core::Belief::certain(RatioPermille(950), Tick(1));
+                    link
+                }),
+            ]),
             environment: Environment {
                 reachable_neighbor_count: 1,
                 churn_permille: RatioPermille(0),

@@ -7,7 +7,7 @@ use jacquard_core::{
     DestinationId, FactSourceClass, NodeId, Observation, OriginAuthenticationClass, RatioPermille,
     RouteId, RouteShapeVisibility, RoutingEngineId, RoutingEvidenceClass, Tick, TransportKind,
 };
-use jacquard_reference_client::topology as reference_topology;
+use jacquard_testkit::topology as reference_topology;
 use jq_node_profile::{MeshEdge, MeshNode, MeshTopologyBuildError, active_route, topology};
 
 fn node(byte: u8) -> jacquard_core::Node {
