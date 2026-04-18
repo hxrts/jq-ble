@@ -692,9 +692,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jacquard-adapter"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "502bf513a1744180887115e15a62adf0dedfcfb084b43ac090847931e718b3ff"
+checksum = "5ecf18c38574ddb61dd34b04c4edcecafd14f71534b362fe0ed1dc2b90f57f06"
 dependencies = [
  "cfg-if",
  "jacquard-core",
@@ -704,9 +704,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-babel"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c803b6feef71723480ed14cd1686f513520d26c8648182f0df81a1495639ccf7"
+checksum = "0f7750780df728ec31201f9223732447dea8e5a4398e2c3fe8dbcfc025859c0d"
 dependencies = [
  "bincode",
  "jacquard-core",
@@ -716,9 +716,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-batman-bellman"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21dc33565d8f9b9ca6d63d0583ca395aaab51d09ee88e2ca05ebe8e29c8f3e31"
+checksum = "44bdce7f261f78ba4bf049010ce70cc57e722b478a89e1e8317fe8046496fc74"
 dependencies = [
  "bincode",
  "jacquard-core",
@@ -728,9 +728,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-batman-classic"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6bdc46518640d66a2f32a1e80e10c994a3a442cc9ca5b5aed60731962113738"
+checksum = "e0af9111c1964d3aac76158c6ae554f5157a12b2ce2fbad1d5ae1d65afc191a1"
 dependencies = [
  "bincode",
  "jacquard-core",
@@ -740,9 +740,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-core"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ceb765e4bb60d9f6bf2b0ad974a34ca0719f0a7d3d2dfefa5cf605037639ef1"
+checksum = "c07cef6f44024224f83cf17d01c7efc7cf449d55010343ce70c7cbd9d9b27c6e"
 dependencies = [
  "jacquard-macros",
  "serde",
@@ -751,9 +751,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-field"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "106a9aa36608253dd41b6a40d2470c4736604febd3a8ee481db7850c1dd7b3a3"
+checksum = "ed93c7223a3da8fa183bda24d5dd05fc8587b5be6beac225e5f9e4ce40a882c5"
 dependencies = [
  "bincode",
  "cfg-if",
@@ -766,9 +766,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-macros"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83046f46816e825efce583a21ad53eb413df81adbff1811f8b02fc2e8c8307e2"
+checksum = "c4ee1b60a5f80132ff0ccda64a213758630a6f3a6c3b43a43babe26cf8bba206"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -778,9 +778,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-mem-link-profile"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff55d6b183da77092377654d14e5bd4082f76d9069c7fdc9a159cdcdec429e3f"
+checksum = "5b6b0f8929f3495f2d707cd2b38f9a7e56d327c680b1894ed98f41b6e2a095f6"
 dependencies = [
  "jacquard-adapter",
  "jacquard-core",
@@ -790,9 +790,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-mem-node-profile"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82cc837a24a2a65d504b986e0a7b049ac0dfc1f031ed170558ece0d5447b3f54"
+checksum = "c87df73486dca76c038fb6acb48433561359e623ae780764bbfb99f1fdcd874b"
 dependencies = [
  "jacquard-adapter",
  "jacquard-core",
@@ -802,9 +802,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-olsrv2"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b8615b3859127282ae58bed976980b38c65e9eb95519b72a8ed4a08dd064601"
+checksum = "21f2408da4e0f7d555ce7e978aeb8b2bcf2634e064d0124caa51569c152c68d9"
 dependencies = [
  "bincode",
  "jacquard-core",
@@ -814,9 +814,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-pathway"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d625829a11e8b5fd7361581e74b9fd173be290fe41d7e461c28c4eaa1c76093e"
+checksum = "1ae4cb19e6f5b3137fa8663c5fe9b6b2067f906d4c488aec35a3e542c6d2f797"
 dependencies = [
  "bincode",
  "cfg-if",
@@ -830,9 +830,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-reference-client"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f216578a44f9fd804c58bcea6bf8dd244b6b09577709a246e886e84ba822472"
+checksum = "8df7baf9c8f1d2551f109812086538200e9d2c117e49bf03c0625dd67aafb8e8"
 dependencies = [
  "jacquard-adapter",
  "jacquard-babel",
@@ -852,9 +852,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-router"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95319245134718e58fa34d77e1c0e9909bb5d21784ebbdd0452856287b6e3f12"
+checksum = "4d9de4dde40632c73edec024de2245ba10710986eacf4ecd6fcb91210c553557"
 dependencies = [
  "bincode",
  "jacquard-core",
@@ -864,9 +864,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-scatter"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b1e926ed834eb6f38cc2317e27e925e8ff60051b21e0fdb03127dbbb252ecb3"
+checksum = "1c37a9f460be3ba574833ac161b07c07a923a62778a1082c9746e5d17c38739c"
 dependencies = [
  "bincode",
  "jacquard-core",
@@ -876,9 +876,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-testkit"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5337663c0d1790a3f88cd3d7d6915a4ae444127d8dcb09b9f9e53a5f59077259"
+checksum = "d602aa61b043494907a7deed3ca8ddc343f1914a8e7896d7b012109ee52623a5"
 dependencies = [
  "jacquard-adapter",
  "jacquard-babel",
@@ -894,9 +894,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-traits"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fd92eae9856b99245a3a51b9e0893fbc4a8ff32153e857b2716eab6c420e98c"
+checksum = "45bba082bcf99bb2394498fada5bacf13025f605390a690098aa023e28c13843"
 dependencies = [
  "blake3",
  "jacquard-core",

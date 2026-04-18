@@ -8,7 +8,7 @@ toolkit_shell_cmd := "./scripts/toolkit-shell.sh"
 toolkit_cmd := "./scripts/toolkit-shell.sh toolkit-xtask"
 toolkit_dylint := "./scripts/toolkit-shell.sh toolkit-dylint --repo-root ."
 install_dylint_cmd := "./scripts/toolkit-shell.sh toolkit-install-dylint"
-fmt_cmd := "./scripts/toolkit-shell.sh toolkit-fmt"
+fmt_cmd := "nix develop --command toolkit-fmt"
 
 # check workspace compiles
 check:
