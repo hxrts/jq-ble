@@ -24,7 +24,7 @@ pub use client::{
     JacquardBleSendStage,
 };
 pub use effects::BleRuntimeEffects;
-pub use jq_link_profile as link_profile;
+pub use jq_link_profile::{self as link_profile, BleConfig, BleScanMode};
 pub use jq_node_profile as node_profile;
 pub use routing::JacquardBleRouter;
 

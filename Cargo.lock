@@ -95,8 +95,9 @@ dependencies = [
 
 [[package]]
 name = "blew"
-version = "0.1.0-alpha.3"
-source = "git+https://github.com/mcginty/blew#6ceba0946209fc31089c00b75e808f89bb4e8709"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8cd4823206989f23d9772676c616a311a3a8d1903d6d2d17cdda4ebf3c38c34"
 dependencies = [
  "bitflags 2.11.0",
  "bluer",

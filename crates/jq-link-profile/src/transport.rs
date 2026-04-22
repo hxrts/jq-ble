@@ -5,9 +5,11 @@
 //! [`BleDriverCommand`], [`BleSession`], [`PeerSessions`],
 //! [`DiscoveredPeerHint`], and [`BleLinkError`].
 
-use blew::central::Central;
-use blew::peripheral::Peripheral;
-use blew::types::DeviceId;
+use std::time::Duration;
+
+use blew::central::{Central, CentralConfig, ScanFilter, ScanMode};
+use blew::peripheral::{Peripheral, PeripheralConfig};
+use blew::types::{BleDevice, DeviceId};
 use jacquard_core::{LinkEndpoint, NodeId, TransportDeliveryIntent, TransportError};
 use jacquard_host_support::{
     DispatchReceiver, DispatchSender, TransportIngressNotifier, TransportIngressReceiver,
@@ -16,6 +18,7 @@ use jacquard_traits::{TransportDriver, TransportSenderEffects, effect_handler};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use uuid::Uuid;
 
 use crate::task::BleRuntimeTask;
 
@@ -34,6 +37,18 @@ pub(crate) type BleRuntimeParts = (
 pub struct BleConfig {
     pub ingress_capacity: u32,
     pub command_capacity: u32,
+    pub central_restore_identifier: Option<String>,
+    pub peripheral_restore_identifier: Option<String>,
+    pub startup_readiness_timeout_ms: Option<u64>,
+    pub scan_service_uuids: Vec<Uuid>,
+    pub scan_mode: BleScanMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BleScanMode {
+    #[default]
+    LowLatency,
+    LowPower,
 }
 
 impl Default for BleConfig {
@@ -41,7 +56,44 @@ impl Default for BleConfig {
         Self {
             ingress_capacity: DEFAULT_INGRESS_CAPACITY,
             command_capacity: DEFAULT_COMMAND_CAPACITY,
+            central_restore_identifier: None,
+            peripheral_restore_identifier: None,
+            startup_readiness_timeout_ms: None,
+            scan_service_uuids: Vec::new(),
+            scan_mode: BleScanMode::LowLatency,
         }
+    }
+}
+
+impl BleConfig {
+    #[must_use]
+    pub(crate) fn scan_filter(&self) -> ScanFilter {
+        ScanFilter {
+            services: self.scan_service_uuids.clone(),
+            mode: self.scan_mode.into(),
+        }
+    }
+}
+
+impl From<BleScanMode> for ScanMode {
+    fn from(mode: BleScanMode) -> Self {
+        match mode {
+            BleScanMode::LowLatency => Self::LowLatency,
+            BleScanMode::LowPower => Self::LowPower,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BleRestoredState {
+    pub central_devices: Vec<BleDevice>,
+    pub peripheral_service_uuids: Vec<Uuid>,
+}
+
+impl BleRestoredState {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.central_devices.is_empty() && self.peripheral_service_uuids.is_empty()
     }
 }
 
@@ -165,8 +217,10 @@ impl PeerSessions {
     }
 
     #[must_use]
-    pub(crate) fn has_notify_subscriber(&self) -> bool {
-        !self.notify_subscribers.is_empty()
+    pub(crate) fn notify_subscriber_device_id(&self) -> Option<&DeviceId> {
+        self.notify_subscribers
+            .first()
+            .map(|subscriber| &subscriber.device_id)
     }
 
     pub(crate) fn install_gatt_central(&mut self, session: BleSession) {
@@ -427,9 +481,19 @@ impl BleTransportComponents {
     #[must_use = "constructing the BLE transport components has no effect unless the returned components are used"]
     pub async fn new(local_node_id: NodeId, config: BleConfig) -> Result<Self, BleLinkError> {
         // recursion-exception: constructor performs backend setup while retaining the conventional `new` entrypoint
-        let central: Central = Central::new().await?;
-        let peripheral: Peripheral = Peripheral::new().await?;
-        BleRuntimeTask::spawn(local_node_id, central, peripheral, config)
+        let (central, central_devices) = configured_central(&config).await?;
+        let (peripheral, peripheral_service_uuids) = configured_peripheral(&config).await?;
+        let restored_state = BleRestoredState {
+            central_devices,
+            peripheral_service_uuids,
+        };
+        BleRuntimeTask::spawn_with_restored_state(
+            local_node_id,
+            central,
+            peripheral,
+            config,
+            restored_state,
+        )
     }
 
     #[must_use]
@@ -457,4 +521,62 @@ impl BleTransportComponents {
             self.runtime_task,
         )
     }
+}
+
+async fn configured_central(config: &BleConfig) -> Result<(Central, Vec<BleDevice>), BleLinkError> {
+    let central: Central = if config.central_restore_identifier.is_some() {
+        Central::with_config(CentralConfig {
+            restore_identifier: config.central_restore_identifier.clone(),
+        })
+        .await?
+    } else {
+        Central::new().await?
+    };
+    let restored_devices = take_restored_central_devices(&central);
+    if let Some(timeout_ms) = config.startup_readiness_timeout_ms {
+        central
+            .wait_ready(Duration::from_millis(timeout_ms))
+            .await?;
+    }
+    Ok((central, restored_devices))
+}
+
+async fn configured_peripheral(
+    config: &BleConfig,
+) -> Result<(Peripheral, Vec<Uuid>), BleLinkError> {
+    let peripheral: Peripheral = if config.peripheral_restore_identifier.is_some() {
+        Peripheral::with_config(PeripheralConfig {
+            restore_identifier: config.peripheral_restore_identifier.clone(),
+        })
+        .await?
+    } else {
+        Peripheral::new().await?
+    };
+    let restored_services = take_restored_peripheral_services(&peripheral);
+    if let Some(timeout_ms) = config.startup_readiness_timeout_ms {
+        peripheral
+            .wait_ready(Duration::from_millis(timeout_ms))
+            .await?;
+    }
+    Ok((peripheral, restored_services))
+}
+
+#[cfg(target_vendor = "apple")]
+fn take_restored_central_devices(central: &Central) -> Vec<BleDevice> {
+    central.take_restored().unwrap_or_default()
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn take_restored_central_devices(_central: &Central) -> Vec<BleDevice> {
+    Vec::new()
+}
+
+#[cfg(target_vendor = "apple")]
+fn take_restored_peripheral_services(peripheral: &Peripheral) -> Vec<Uuid> {
+    peripheral.take_restored().unwrap_or_default()
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn take_restored_peripheral_services(_peripheral: &Peripheral) -> Vec<Uuid> {
+    Vec::new()
 }

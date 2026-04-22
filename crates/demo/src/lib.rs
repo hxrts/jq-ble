@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use futures_util::{Stream, StreamExt, stream};
 use jacquard_core::{NodeId, RouteError, RouteSelectionError, TransportError};
-use jq_client::{BleBridgeError, BleClientError, JacquardBleClient};
+use jq_client::{BleBridgeError, BleClientError, BleConfig, JacquardBleClient};
 use jq_node_profile::MeshTopology;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -141,8 +141,16 @@ impl JacquardBleService {
     #[must_use = "constructing the BLE service has no effect unless the returned service is used"]
     pub async fn new(local_node_id: NodeId) -> Result<Self, JacquardBleServiceError> {
         // recursion-exception: constructor delegates to the shared-client assembly path with the same semantic name
+        Self::new_with_ble_config(local_node_id, BleConfig::default()).await
+    }
+
+    #[must_use = "constructing the BLE service has no effect unless the returned service is used"]
+    pub async fn new_with_ble_config(
+        local_node_id: NodeId,
+        config: BleConfig,
+    ) -> Result<Self, JacquardBleServiceError> {
         Ok(Self::from_shared_client(Arc::new(
-            JacquardBleClient::new(local_node_id).await?,
+            JacquardBleClient::new_with_config(local_node_id, config).await?,
         )))
     }
 

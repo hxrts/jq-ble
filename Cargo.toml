@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-blew = { version = "0.1.0-alpha.3", git = "https://github.com/mcginty/blew", package = "blew" }
+blew = "0.2.3"
 jacquard-cast-support = "0.8.0"
 jacquard-core = "0.8.0"
 jacquard-host-support = "0.8.0"

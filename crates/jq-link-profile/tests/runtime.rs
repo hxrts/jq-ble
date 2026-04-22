@@ -4,11 +4,11 @@
 //! `LinkObserved`, hint mismatch fail-closed behaviour, sender queue
 //! isolation from BLE I/O, and peripheral-side node ID reads.
 
-use blew::central::{Central, CentralEvent, WriteType};
+use blew::central::{Central, CentralEvent, DisconnectCause, ScanMode, WriteType};
 use blew::gatt::service::GattService;
-use blew::peripheral::{AdvertisingConfig, Peripheral, PeripheralEvent};
+use blew::peripheral::{AdvertisingConfig, Peripheral, PeripheralRequest, PeripheralStateEvent};
 use blew::testing::MockLink;
-use blew::types::DeviceId;
+use blew::types::{BleDevice, DeviceId};
 use bytes::Bytes;
 use futures_util::SinkExt;
 use jacquard_core::{
@@ -19,8 +19,9 @@ use jacquard_core::{
 use jacquard_host_support::DispatchReceiver;
 use jacquard_traits::{TransportDriver, TransportSenderEffects};
 use jq_link_profile::{
-    BleConfig, BleNotifySubscriber, BleOutboundCommand, BleRuntimeTask, BleSession,
-    BleTransportDriver, JACQUARD_C2P_CHAR_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
+    BleConfig, BleNotifySubscriber, BleOutboundCommand, BleRestoredState, BleRuntimeTask,
+    BleScanMode, BleSession, BleTransportDriver, JACQUARD_C2P_CHAR_UUID,
+    JACQUARD_IDENTITY_SERVICE_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
     JACQUARD_PSM_CHAR_UUID, PeerSessions, advertised_hint_service, gatt_endpoint,
     gatt_fallback_service, gatt_l2cap_service, gatt_notify_multicast_support,
     identity_gatt_service, l2cap_endpoint, parse_psm_value,
@@ -62,6 +63,18 @@ async fn shutdown_runtime(
         .await
         .expect("runtime exits")
         .expect("join runtime");
+}
+
+fn mock_runtime_task_with_config(
+    local_node_id: NodeId,
+    config: BleConfig,
+) -> BleRuntimeTask<blew::testing::MockCentral, blew::testing::MockPeripheral> {
+    let (central_link, peripheral_link) = MockLink::pair();
+    let central: Central<_> = Central::from_backend(central_link.central);
+    let peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+    let (task, _) =
+        BleRuntimeTask::new(local_node_id, central, peripheral, config).expect("build runtime");
+    task
 }
 
 async fn spawn_mock_runtime(
@@ -135,6 +148,33 @@ async fn wait_for_link_kinds(
         .collect()
 }
 
+#[test]
+fn ble_config_default_scan_policy_matches_current_foreground_scan() {
+    let task = mock_runtime_task_with_config(NodeId([1; 32]), BleConfig::default());
+
+    let scan_filter = task.testing_scan_filter();
+
+    assert!(scan_filter.services.is_empty());
+    assert_eq!(scan_filter.mode, ScanMode::LowLatency);
+}
+
+#[test]
+fn ble_config_custom_scan_policy_maps_to_blew_filter() {
+    let task = mock_runtime_task_with_config(
+        NodeId([1; 32]),
+        BleConfig {
+            scan_service_uuids: vec![JACQUARD_IDENTITY_SERVICE_UUID],
+            scan_mode: BleScanMode::LowPower,
+            ..BleConfig::default()
+        },
+    );
+
+    let scan_filter = task.testing_scan_filter();
+
+    assert_eq!(scan_filter.services, vec![JACQUARD_IDENTITY_SERVICE_UUID]);
+    assert_eq!(scan_filter.mode, ScanMode::LowPower);
+}
+
 #[tokio::test]
 async fn runtime_task_owns_ble_roles_while_components_expose_bridge_surfaces() {
     let (central_link, peripheral_link) = MockLink::pair();
@@ -198,6 +238,56 @@ async fn gatt_only_peers_resolve_identity_before_link_observed() {
 }
 
 #[tokio::test]
+async fn restored_central_devices_are_rehydrated_before_scan_startup() {
+    let local_node_id = NodeId([1; 32]);
+    let remote_node_id = NodeId([5; 32]);
+
+    let (central_link, remote_peripheral_link) = MockLink::pair();
+    let runtime_central: Central<_> = Central::from_backend(central_link.central);
+    let remote_peripheral: Peripheral<_> =
+        Peripheral::from_backend(remote_peripheral_link.peripheral);
+    remote_peripheral
+        .add_service(&identity_gatt_service(&remote_node_id))
+        .await
+        .expect("add remote identity service");
+
+    let (_remote_central_link, peripheral_link) = MockLink::pair();
+    let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+    let restored_state = BleRestoredState {
+        central_devices: vec![BleDevice {
+            id: DeviceId::from("mock-peripheral"),
+            name: Some("restored-peer".into()),
+            rssi: None,
+            services: vec![advertised_hint_service(&remote_node_id).uuid],
+        }],
+        peripheral_service_uuids: Vec::new(),
+    };
+    let components = BleRuntimeTask::spawn_with_restored_state(
+        local_node_id,
+        runtime_central,
+        runtime_peripheral,
+        BleConfig::default(),
+        restored_state,
+    )
+    .expect("spawn runtime with restored state");
+    let (mut driver, _sender, _outbound, control, _notifier, runtime_task) =
+        components.into_parts();
+
+    let ingress = wait_for_ingress(&mut driver, 1).await;
+    assert!(ingress.iter().any(|event| {
+        matches!(
+            event,
+            TransportIngressEvent::LinkObserved {
+                remote_node_id: observed,
+                ..
+            } if *observed == remote_node_id
+        )
+    }));
+
+    shutdown_runtime(control, runtime_task).await;
+}
+
+#[tokio::test]
 async fn hint_mismatch_fails_closed() {
     let hinted_node_id = NodeId([7; 32]);
     let resolved_node_id = NodeId([8; 32]);
@@ -241,6 +331,10 @@ async fn sender_queue_does_not_perform_ble_io_until_control_dispatch() {
         })
         .await
         .expect("start advertising");
+    let mut remote_state_events = remote_peripheral.state_events();
+    let mut remote_requests = remote_peripheral
+        .take_requests()
+        .expect("remote request stream");
 
     let (_remote_central_link, peripheral_link) = MockLink::pair();
     let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
@@ -257,14 +351,13 @@ async fn sender_queue_does_not_perform_ble_io_until_control_dispatch() {
     // allow-ignored-result: this wait only ensures ingress drained before the subsequent assertion path
     let _ = wait_for_ingress(&mut driver, 1).await;
 
-    let mut remote_events = remote_peripheral.events();
-    let setup_event = timeout(Duration::from_millis(100), remote_events.next())
+    let setup_event = timeout(Duration::from_millis(100), remote_state_events.next())
         .await
         .expect("wait for subscription setup event")
         .expect("remote events should stay open");
     assert!(matches!(
         setup_event,
-        PeripheralEvent::SubscriptionChanged {
+        PeripheralStateEvent::SubscriptionChanged {
             char_uuid: JACQUARD_P2C_CHAR_UUID,
             subscribed: true,
             ..
@@ -279,7 +372,7 @@ async fn sender_queue_does_not_perform_ble_io_until_control_dispatch() {
         .expect("queue send");
 
     assert!(
-        timeout(Duration::from_millis(50), remote_events.next())
+        timeout(Duration::from_millis(50), remote_requests.next())
             .await
             .is_err(),
         "sender should only queue work"
@@ -293,12 +386,12 @@ async fn sender_queue_does_not_perform_ble_io_until_control_dispatch() {
         .await
         .expect("dispatch queued batch");
 
-    let event = timeout(Duration::from_millis(100), remote_events.next())
+    let event = timeout(Duration::from_millis(100), remote_requests.next())
         .await
         .expect("wait for remote write")
         .expect("remote events should stay open");
     match event {
-        PeripheralEvent::WriteRequest {
+        PeripheralRequest::Write {
             client_id,
             char_uuid,
             value,
@@ -380,6 +473,11 @@ async fn subscribed_peripheral_notify_state_is_not_unicast_egress() {
     let runtime_task = tokio::spawn(task.testing_run());
     let mut remote_events = remote_central.events();
     remote_central
+        .connect(&DeviceId::from("mock-peripheral"))
+        .await
+        .expect("connect to runtime peripheral");
+    sleep(Duration::from_millis(20)).await;
+    remote_central
         .subscribe_characteristic(&DeviceId::from("mock-peripheral"), JACQUARD_P2C_CHAR_UUID)
         .await
         .expect("subscribe to runtime notifications");
@@ -399,7 +497,7 @@ async fn subscribed_peripheral_notify_state_is_not_unicast_egress() {
             _ = &mut deadline => break,
             event = remote_events.next() => match event {
                 Some(CentralEvent::CharacteristicNotification { .. }) => {
-                    panic!("node-targeted unicast must not use untargeted notify fanout");
+                    panic!("node-targeted unicast must not use subscriber notify fanout");
                 }
                 Some(_) => {}
                 None => break,
@@ -438,6 +536,11 @@ async fn multicast_intent_dispatches_gatt_notify_fanout() {
     }
     let runtime_task = tokio::spawn(task.testing_run());
     let mut remote_events = remote_central.events();
+    remote_central
+        .connect(&DeviceId::from("mock-peripheral"))
+        .await
+        .expect("connect to runtime peripheral");
+    sleep(Duration::from_millis(20)).await;
     remote_central
         .subscribe_characteristic(&DeviceId::from("mock-peripheral"), JACQUARD_P2C_CHAR_UUID)
         .await
@@ -505,6 +608,11 @@ async fn multicast_intent_without_subscriber_state_does_not_notify() {
     let (_driver, _sender, _outbound, control, _notifier, runtime_task) = components.into_parts();
     let mut remote_events = remote_central.events();
     remote_central
+        .connect(&DeviceId::from("mock-peripheral"))
+        .await
+        .expect("connect to runtime peripheral");
+    sleep(Duration::from_millis(20)).await;
+    remote_central
         .subscribe_characteristic(&DeviceId::from("mock-peripheral"), JACQUARD_P2C_CHAR_UUID)
         .await
         .expect("subscribe to runtime notifications");
@@ -567,6 +675,10 @@ async fn peripheral_side_node_id_reads_respond_with_local_identity() {
     .expect("spawn runtime");
     let (_driver, _sender, _outbound, control, _notifier, runtime_task) = components.into_parts();
 
+    remote_central
+        .connect(&DeviceId::from("mock-peripheral"))
+        .await
+        .expect("connect to runtime peripheral");
     sleep(Duration::from_millis(20)).await;
     let value = remote_central
         .read_characteristic(
@@ -599,6 +711,10 @@ async fn unresolved_peripheral_writes_fail_closed() {
     .expect("spawn runtime");
     let (_driver, _sender, _outbound, control, _notifier, runtime_task) = components.into_parts();
 
+    remote_central
+        .connect(&DeviceId::from("mock-peripheral"))
+        .await
+        .expect("connect to runtime peripheral");
     sleep(Duration::from_millis(20)).await;
     let result = remote_central
         .write_characteristic(
@@ -634,6 +750,10 @@ async fn resolved_peripheral_writes_emit_payload_and_ack() {
     task.testing_seed_resolved_peer(DeviceId::from("mock-central"), remote_node_id);
     let runtime_task = tokio::spawn(task.testing_run());
 
+    remote_central
+        .connect(&DeviceId::from("mock-peripheral"))
+        .await
+        .expect("connect to runtime peripheral");
     sleep(Duration::from_millis(20)).await;
     remote_central
         .write_characteristic(
@@ -705,11 +825,12 @@ async fn central_opened_l2cap_upgrade_emits_updates_and_carries_framed_payloads(
     let (mut driver, mut sender, mut outbound, control, _notifier, runtime_task) =
         components.into_parts();
 
-    let accepted_channel = timeout(Duration::from_millis(250), remote_accept_stream.next())
-        .await
-        .expect("wait for accepted l2cap channel")
-        .expect("accept stream should stay open")
-        .expect("accept channel");
+    let (_device_id, accepted_channel) =
+        timeout(Duration::from_millis(250), remote_accept_stream.next())
+            .await
+            .expect("wait for accepted l2cap channel")
+            .expect("accept stream should stay open")
+            .expect("accept channel");
     let mut accepted_channel = accepted_channel;
 
     let mut remote_identity = [0_u8; 32];
@@ -795,15 +916,19 @@ async fn accepted_l2cap_channels_register_and_close_without_fake_gatt_downgrade(
         BleConfig::default(),
     )
     .expect("build runtime");
-    task.testing_seed_resolved_peer(DeviceId::from("mock-central"), remote_node_id);
+    task.testing_seed_resolved_peer(DeviceId::from("mock-peripheral"), remote_node_id);
     task.testing_seed_sessions(
         remote_node_id,
         PeerSessions::gatt_notify_fanout(BleNotifySubscriber {
-            device_id: DeviceId::from("mock-central"),
+            device_id: DeviceId::from("mock-peripheral"),
         }),
     );
     let runtime_task = tokio::spawn(task.testing_run());
 
+    remote_central
+        .connect(&DeviceId::from("mock-peripheral"))
+        .await
+        .expect("connect to runtime peripheral");
     sleep(Duration::from_millis(20)).await;
     let psm_bytes = remote_central
         .read_characteristic(&DeviceId::from("mock-peripheral"), JACQUARD_PSM_CHAR_UUID)
@@ -841,7 +966,10 @@ async fn accepted_l2cap_channels_register_and_close_without_fake_gatt_downgrade(
             payload,
         } => {
             assert_eq!(from_node_id, &remote_node_id);
-            assert_eq!(endpoint, &l2cap_endpoint(&DeviceId::from("mock-central")));
+            assert_eq!(
+                endpoint,
+                &l2cap_endpoint(&DeviceId::from("mock-peripheral"))
+            );
             assert_eq!(payload, b"accepted-frame");
         }
         other => panic!("unexpected ingress event: {other:?}"),
@@ -905,11 +1033,12 @@ async fn control_path_events_are_retried_after_ingress_overflow() {
     let (mut driver, _sender, _outbound, control, _notifier, runtime_task) =
         components.into_parts();
 
-    let accepted_channel = timeout(Duration::from_millis(250), remote_accept_stream.next())
-        .await
-        .expect("wait for accepted l2cap channel")
-        .expect("accept stream should stay open")
-        .expect("accept channel");
+    let (_device_id, accepted_channel) =
+        timeout(Duration::from_millis(250), remote_accept_stream.next())
+            .await
+            .expect("wait for accepted l2cap channel")
+            .expect("accept stream should stay open")
+            .expect("accept channel");
     let mut accepted_channel = accepted_channel;
 
     let mut remote_identity = [0_u8; 32];
@@ -950,7 +1079,21 @@ async fn control_path_events_are_retried_after_ingress_overflow() {
 }
 
 #[tokio::test]
-async fn disconnect_clears_gatt_session_state_per_device_id_policy() {
+async fn disconnect_causes_clear_gatt_session_state_per_device_id_policy() {
+    for cause in [
+        DisconnectCause::LocalClose,
+        DisconnectCause::RemoteClose,
+        DisconnectCause::LinkLoss,
+        DisconnectCause::AdapterOff,
+        DisconnectCause::Gatt133,
+        DisconnectCause::Timeout,
+        DisconnectCause::Unknown(42),
+    ] {
+        assert_disconnect_cause_clears_gatt_session_state(cause).await;
+    }
+}
+
+async fn assert_disconnect_cause_clears_gatt_session_state(cause: DisconnectCause) {
     let (central_link, _remote_peripheral_link) = MockLink::pair();
     let runtime_central: Central<_> = Central::from_backend(central_link.central);
     let (_remote_central_link, peripheral_link) = MockLink::pair();
@@ -975,6 +1118,7 @@ async fn disconnect_clears_gatt_session_state_per_device_id_policy() {
 
     task.testing_handle_central_event(CentralEvent::DeviceDisconnected {
         device_id: device_id.clone(),
+        cause,
     })
     .await;
 

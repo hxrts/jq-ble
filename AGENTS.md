@@ -31,14 +31,15 @@ The main job of this repo is to bridge those two worlds cleanly:
 - Jacquard time and round cadence are owned by the host bridge, not by the BLE runtime.
 - BLE advertisement hints are not full identity. Full remote identity must be resolved before emitting Jacquard link observations.
 - The synchronous sender side only queues outbound commands. Actual BLE I/O is performed later by the async runtime owner.
-- GATT notifications are multicast/fanout, not targeted unicast. Use L2CAP or central GATT writes for node-targeted sends.
+- GATT notifications are explicit multicast/fanout in jq-ble. `blew` targets individual subscribers on Apple/Android, but Linux/BlueZ falls back to characteristic-wide broadcast, so node-targeted sends must use L2CAP or central GATT writes.
 - BLE advertising is discovery/control-plane only; routed payloads must not use advertising.
+- Apple/CoreBluetooth restoration is configured through jq-ble `BleConfig` restore identifiers. Restored state must be drained before scan/connect/service work; L2CAP listeners are republished because L2CAP channels are not restored.
 
 ## External BLE Dependency
 
-This repo does not vendor `blew`. The workspace imports `blew` from:
+This repo does not vendor `blew`. The workspace imports `blew` from crates.io:
 
-- `https://github.com/mcginty/blew`
+- `blew = "0.2.3"`
 
 If you need to inspect or change BLE substrate behavior, look there first.
 

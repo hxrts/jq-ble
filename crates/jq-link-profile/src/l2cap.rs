@@ -25,7 +25,7 @@ pub(crate) const L2CAP_FRAME_MAX_BYTES: usize = 1472;
 const L2CAP_IDENTITY_SIZE_BYTES: usize = 32;
 
 pub(crate) type L2capAcceptStream =
-    Pin<Box<dyn Stream<Item = blew::BlewResult<L2capChannel>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = blew::BlewResult<(DeviceId, L2capChannel)>> + Send + 'static>>;
 
 #[derive(Debug)]
 pub(crate) struct ActiveL2capChannel {
