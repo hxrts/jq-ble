@@ -178,6 +178,66 @@ pub fn published_topology() -> Observation<Configuration> {
     }
 }
 
+/// Three-node topology with local=1, relay=2, destination=3 and no direct
+/// local-to-destination link.
+#[must_use]
+pub fn relay_topology() -> Observation<Configuration> {
+    Observation {
+        value: Configuration {
+            epoch: RouteEpoch(1),
+            nodes: BTreeMap::from([
+                (
+                    NodeId([1; 32]),
+                    topology::node(1).for_engine(&MERCATOR_ENGINE_ID).build(),
+                ),
+                (
+                    NodeId([2; 32]),
+                    topology::node(2).for_engine(&MERCATOR_ENGINE_ID).build(),
+                ),
+                (
+                    NodeId([3; 32]),
+                    topology::node(3).for_engine(&MERCATOR_ENGINE_ID).build(),
+                ),
+            ]),
+            links: BTreeMap::from([
+                (
+                    (NodeId([1; 32]), NodeId([2; 32])),
+                    topology::link(2)
+                        .with_confidence(RatioPermille(900))
+                        .build(),
+                ),
+                (
+                    (NodeId([2; 32]), NodeId([1; 32])),
+                    topology::link(1)
+                        .with_confidence(RatioPermille(900))
+                        .build(),
+                ),
+                (
+                    (NodeId([2; 32]), NodeId([3; 32])),
+                    topology::link(3)
+                        .with_confidence(RatioPermille(900))
+                        .build(),
+                ),
+                (
+                    (NodeId([3; 32]), NodeId([2; 32])),
+                    topology::link(2)
+                        .with_confidence(RatioPermille(900))
+                        .build(),
+                ),
+            ]),
+            environment: Environment {
+                reachable_neighbor_count: 1,
+                churn_permille: RatioPermille(0),
+                contention_permille: RatioPermille(0),
+            },
+        },
+        source_class: FactSourceClass::Local,
+        evidence_class: RoutingEvidenceClass::DirectObservation,
+        origin_authentication: OriginAuthenticationClass::Controlled,
+        observed_at_tick: Tick(1),
+    }
+}
+
 /// Single-node topology containing only the local node; suitable for tests
 /// that inject link observations to drive topology discovery.
 #[must_use]

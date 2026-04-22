@@ -33,13 +33,33 @@ pub(crate) type BleRuntimeParts = (
     TransportIngressNotifier,
 );
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BleConfig {
+    pub queue: BleQueueConfig,
+    pub restoration: BleRestorationConfig,
+    pub startup: BleStartupConfig,
+    pub scan: BleScanConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BleQueueConfig {
     pub ingress_capacity: u32,
     pub command_capacity: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BleRestorationConfig {
     pub central_restore_identifier: Option<String>,
     pub peripheral_restore_identifier: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BleStartupConfig {
     pub startup_readiness_timeout_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BleScanConfig {
     pub scan_service_uuids: Vec<Uuid>,
     pub scan_mode: BleScanMode,
 }
@@ -51,14 +71,18 @@ pub enum BleScanMode {
     LowPower,
 }
 
-impl Default for BleConfig {
+impl Default for BleQueueConfig {
     fn default() -> Self {
         Self {
             ingress_capacity: DEFAULT_INGRESS_CAPACITY,
             command_capacity: DEFAULT_COMMAND_CAPACITY,
-            central_restore_identifier: None,
-            peripheral_restore_identifier: None,
-            startup_readiness_timeout_ms: None,
+        }
+    }
+}
+
+impl Default for BleScanConfig {
+    fn default() -> Self {
+        Self {
             scan_service_uuids: Vec::new(),
             scan_mode: BleScanMode::LowLatency,
         }
@@ -66,6 +90,20 @@ impl Default for BleConfig {
 }
 
 impl BleConfig {
+    #[must_use]
+    pub(crate) fn scan_filter(&self) -> ScanFilter {
+        self.scan.scan_filter()
+    }
+
+    #[must_use]
+    pub(crate) fn readiness_timeout(&self) -> Option<Duration> {
+        self.startup
+            .startup_readiness_timeout_ms
+            .map(Duration::from_millis)
+    }
+}
+
+impl BleScanConfig {
     #[must_use]
     pub(crate) fn scan_filter(&self) -> ScanFilter {
         ScanFilter {
@@ -216,6 +254,13 @@ impl PeerSessions {
         self.notify_subscribers.push(subscriber);
     }
 
+    pub(crate) fn remove_gatt_subscription(&mut self, device_id: &DeviceId) -> bool {
+        let previous_len = self.notify_subscribers.len();
+        self.notify_subscribers
+            .retain(|subscriber| &subscriber.device_id != device_id);
+        previous_len != self.notify_subscribers.len()
+    }
+
     #[must_use]
     pub(crate) fn notify_subscriber_device_id(&self) -> Option<&DeviceId> {
         self.notify_subscribers
@@ -284,7 +329,7 @@ impl PeerSessions {
         }
         for subscriber in &self.notify_subscribers {
             if &subscriber.device_id == device_id {
-                push_unique_endpoint(&mut endpoints, crate::gatt::gatt_endpoint(device_id));
+                push_unique_endpoint(&mut endpoints, crate::gatt::gatt_notify_fanout_endpoint());
             }
         }
         endpoints
@@ -524,19 +569,17 @@ impl BleTransportComponents {
 }
 
 async fn configured_central(config: &BleConfig) -> Result<(Central, Vec<BleDevice>), BleLinkError> {
-    let central: Central = if config.central_restore_identifier.is_some() {
+    let central: Central = if config.restoration.central_restore_identifier.is_some() {
         Central::with_config(CentralConfig {
-            restore_identifier: config.central_restore_identifier.clone(),
+            restore_identifier: config.restoration.central_restore_identifier.clone(),
         })
         .await?
     } else {
         Central::new().await?
     };
     let restored_devices = take_restored_central_devices(&central);
-    if let Some(timeout_ms) = config.startup_readiness_timeout_ms {
-        central
-            .wait_ready(Duration::from_millis(timeout_ms))
-            .await?;
+    if let Some(timeout) = config.readiness_timeout() {
+        central.wait_ready(timeout).await?;
     }
     Ok((central, restored_devices))
 }
@@ -544,19 +587,17 @@ async fn configured_central(config: &BleConfig) -> Result<(Central, Vec<BleDevic
 async fn configured_peripheral(
     config: &BleConfig,
 ) -> Result<(Peripheral, Vec<Uuid>), BleLinkError> {
-    let peripheral: Peripheral = if config.peripheral_restore_identifier.is_some() {
+    let peripheral: Peripheral = if config.restoration.peripheral_restore_identifier.is_some() {
         Peripheral::with_config(PeripheralConfig {
-            restore_identifier: config.peripheral_restore_identifier.clone(),
+            restore_identifier: config.restoration.peripheral_restore_identifier.clone(),
         })
         .await?
     } else {
         Peripheral::new().await?
     };
     let restored_services = take_restored_peripheral_services(&peripheral);
-    if let Some(timeout_ms) = config.startup_readiness_timeout_ms {
-        peripheral
-            .wait_ready(Duration::from_millis(timeout_ms))
-            .await?;
+    if let Some(timeout) = config.readiness_timeout() {
+        peripheral.wait_ready(timeout).await?;
     }
     Ok((peripheral, restored_services))
 }

@@ -4,8 +4,9 @@
 //! that protocol mix must account for every authoritative transport kind.
 
 use jacquard_core::{
-    DestinationId, FactSourceClass, NodeId, Observation, OriginAuthenticationClass, RatioPermille,
-    RouteId, RouteShapeVisibility, RoutingEngineId, RoutingEvidenceClass, Tick, TransportKind,
+    DestinationId, FactSourceClass, MulticastGroupId, NodeId, Observation,
+    OriginAuthenticationClass, RatioPermille, RouteId, RouteShapeVisibility, RoutingEngineId,
+    RoutingEvidenceClass, Tick, TransportDeliveryMode, TransportKind,
 };
 use jacquard_testkit::topology as reference_topology;
 use jq_node_profile::{MeshEdge, MeshNode, MeshTopologyBuildError, active_route, topology};
@@ -199,6 +200,44 @@ fn reachable_delivery_accepts_non_authoritative_protocol_mix_without_path_valida
 
     let active_route = topology.active_route(&route_id).expect("reachable route");
     assert_eq!(active_route.protocol_mix, vec![TransportKind::BleGatt]);
+}
+
+#[test]
+fn active_route_can_surface_multicast_delivery_metadata() {
+    let local_node_id = NodeId([1; 32]);
+    let receiver_a = NodeId([2; 32]);
+    let receiver_b = NodeId([3; 32]);
+    let route_id = RouteId([5; 16]);
+    let group_id = MulticastGroupId([7; 16]);
+    let topology = topology(local_node_id, Tick(14))
+        .with_node(MeshNode::local(local_node_id, node(1)))
+        .with_node(MeshNode::remote(receiver_a, node(2)))
+        .with_node(MeshNode::remote(receiver_b, node(3)))
+        .with_edge(edge(1, 2, TransportKind::BleGatt, Tick(14)))
+        .with_active_route(
+            active_route(
+                route_id,
+                local_node_id,
+                DestinationId::Node(receiver_a),
+                receiver_a,
+                engine(),
+                Tick(14),
+            )
+            .direct(receiver_a)
+            .with_protocol_mix(vec![TransportKind::BleGatt])
+            .with_multicast_group(group_id, [receiver_a, receiver_b])
+            .build(),
+        )
+        .build()
+        .expect("build multicast route metadata");
+
+    let active_route = topology.active_route(&route_id).expect("multicast route");
+    assert_eq!(active_route.delivery_mode, TransportDeliveryMode::Multicast);
+    assert_eq!(active_route.multicast_group_id, Some(group_id));
+    assert_eq!(
+        active_route.multicast_receivers,
+        vec![receiver_a, receiver_b]
+    );
 }
 
 #[test]

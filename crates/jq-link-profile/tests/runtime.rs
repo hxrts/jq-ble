@@ -19,12 +19,12 @@ use jacquard_core::{
 use jacquard_host_support::DispatchReceiver;
 use jacquard_traits::{TransportDriver, TransportSenderEffects};
 use jq_link_profile::{
-    BleConfig, BleNotifySubscriber, BleOutboundCommand, BleRestoredState, BleRuntimeTask,
-    BleScanMode, BleSession, BleTransportDriver, JACQUARD_C2P_CHAR_UUID,
-    JACQUARD_IDENTITY_SERVICE_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
-    JACQUARD_PSM_CHAR_UUID, PeerSessions, advertised_hint_service, gatt_endpoint,
-    gatt_fallback_service, gatt_l2cap_service, gatt_notify_multicast_support,
-    identity_gatt_service, l2cap_endpoint, parse_psm_value,
+    BleConfig, BleNotifySubscriber, BleOutboundCommand, BleQueueConfig, BleRestorationConfig,
+    BleRestoredState, BleRuntimeTask, BleScanConfig, BleScanMode, BleSession, BleStartupConfig,
+    BleTransportDriver, JACQUARD_C2P_CHAR_UUID, JACQUARD_IDENTITY_SERVICE_UUID,
+    JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID, JACQUARD_PSM_CHAR_UUID, PeerSessions,
+    advertised_hint_service, gatt_endpoint, gatt_fallback_service, gatt_l2cap_service,
+    gatt_notify_multicast_support, identity_gatt_service, l2cap_endpoint, parse_psm_value,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinHandle;
@@ -163,8 +163,10 @@ fn ble_config_custom_scan_policy_maps_to_blew_filter() {
     let task = mock_runtime_task_with_config(
         NodeId([1; 32]),
         BleConfig {
-            scan_service_uuids: vec![JACQUARD_IDENTITY_SERVICE_UUID],
-            scan_mode: BleScanMode::LowPower,
+            scan: BleScanConfig {
+                scan_service_uuids: vec![JACQUARD_IDENTITY_SERVICE_UUID],
+                scan_mode: BleScanMode::LowPower,
+            },
             ..BleConfig::default()
         },
     );
@@ -173,6 +175,50 @@ fn ble_config_custom_scan_policy_maps_to_blew_filter() {
 
     assert_eq!(scan_filter.services, vec![JACQUARD_IDENTITY_SERVICE_UUID]);
     assert_eq!(scan_filter.mode, ScanMode::LowPower);
+}
+
+#[test]
+fn ble_config_groups_keep_defaults_and_accept_non_default_values() {
+    let config = BleConfig {
+        queue: BleQueueConfig {
+            ingress_capacity: 8,
+            command_capacity: 4,
+        },
+        restoration: BleRestorationConfig {
+            central_restore_identifier: Some("central.restore".into()),
+            peripheral_restore_identifier: Some("peripheral.restore".into()),
+        },
+        startup: BleStartupConfig {
+            startup_readiness_timeout_ms: Some(250),
+        },
+        scan: BleScanConfig {
+            scan_service_uuids: vec![JACQUARD_IDENTITY_SERVICE_UUID],
+            scan_mode: BleScanMode::LowPower,
+        },
+    };
+
+    assert_eq!(config.queue.ingress_capacity, 8);
+    assert_eq!(config.queue.command_capacity, 4);
+    assert_eq!(
+        config.restoration.central_restore_identifier.as_deref(),
+        Some("central.restore")
+    );
+    assert_eq!(
+        config.restoration.peripheral_restore_identifier.as_deref(),
+        Some("peripheral.restore")
+    );
+    assert_eq!(config.startup.startup_readiness_timeout_ms, Some(250));
+    assert_eq!(
+        config.scan.scan_service_uuids,
+        vec![JACQUARD_IDENTITY_SERVICE_UUID]
+    );
+    assert_eq!(config.scan.scan_mode, BleScanMode::LowPower);
+
+    let defaults = BleConfig::default();
+    assert_eq!(defaults.queue, BleQueueConfig::default());
+    assert_eq!(defaults.restoration, BleRestorationConfig::default());
+    assert_eq!(defaults.startup, BleStartupConfig::default());
+    assert_eq!(defaults.scan, BleScanConfig::default());
 }
 
 #[tokio::test]
@@ -272,6 +318,161 @@ async fn restored_central_devices_are_rehydrated_before_scan_startup() {
     .expect("spawn runtime with restored state");
     let (mut driver, _sender, _outbound, control, _notifier, runtime_task) =
         components.into_parts();
+
+    let ingress = wait_for_ingress(&mut driver, 1).await;
+    assert!(ingress.iter().any(|event| {
+        matches!(
+            event,
+            TransportIngressEvent::LinkObserved {
+                remote_node_id: observed,
+                ..
+            } if *observed == remote_node_id
+        )
+    }));
+
+    shutdown_runtime(control, runtime_task).await;
+}
+
+#[tokio::test]
+async fn restored_central_devices_without_hints_resolve_identity_directly() {
+    let local_node_id = NodeId([1; 32]);
+    let remote_node_id = NodeId([5; 32]);
+
+    let (central_link, remote_peripheral_link) = MockLink::pair();
+    let runtime_central: Central<_> = Central::from_backend(central_link.central);
+    let remote_peripheral: Peripheral<_> =
+        Peripheral::from_backend(remote_peripheral_link.peripheral);
+    remote_peripheral
+        .add_service(&identity_gatt_service(&remote_node_id))
+        .await
+        .expect("add remote identity service");
+
+    let (_remote_central_link, peripheral_link) = MockLink::pair();
+    let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+    let restored_state = BleRestoredState {
+        central_devices: vec![BleDevice {
+            id: DeviceId::from("mock-peripheral"),
+            name: Some("restored-peer".into()),
+            rssi: None,
+            services: Vec::new(),
+        }],
+        peripheral_service_uuids: Vec::new(),
+    };
+    let components = BleRuntimeTask::spawn_with_restored_state(
+        local_node_id,
+        runtime_central,
+        runtime_peripheral,
+        BleConfig::default(),
+        restored_state,
+    )
+    .expect("spawn runtime with restored state");
+    let (mut driver, _sender, _outbound, control, _notifier, runtime_task) =
+        components.into_parts();
+
+    let ingress = wait_for_ingress(&mut driver, 1).await;
+    assert!(ingress.iter().any(|event| {
+        matches!(
+            event,
+            TransportIngressEvent::LinkObserved {
+                remote_node_id: observed,
+                ..
+            } if *observed == remote_node_id
+        )
+    }));
+
+    shutdown_runtime(control, runtime_task).await;
+}
+
+#[tokio::test]
+async fn restored_central_devices_without_resolvable_identity_are_discarded() {
+    let local_node_id = NodeId([1; 32]);
+
+    let (central_link, _remote_peripheral_link) = MockLink::pair();
+    let runtime_central: Central<_> = Central::from_backend(central_link.central);
+    let (_remote_central_link, peripheral_link) = MockLink::pair();
+    let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+    let restored_state = BleRestoredState {
+        central_devices: vec![BleDevice {
+            id: DeviceId::from("mock-peripheral"),
+            name: Some("restored-peer".into()),
+            rssi: None,
+            services: Vec::new(),
+        }],
+        peripheral_service_uuids: Vec::new(),
+    };
+    let components = BleRuntimeTask::spawn_with_restored_state(
+        local_node_id,
+        runtime_central,
+        runtime_peripheral,
+        BleConfig::default(),
+        restored_state,
+    )
+    .expect("spawn runtime with restored state");
+    let (mut driver, _sender, _outbound, control, _notifier, runtime_task) =
+        components.into_parts();
+
+    sleep(Duration::from_millis(80)).await;
+    assert!(
+        driver
+            .drain_transport_ingress()
+            .expect("drain ingress")
+            .is_empty(),
+        "unresolved restored devices must not emit link observations"
+    );
+
+    shutdown_runtime(control, runtime_task).await;
+}
+
+#[tokio::test]
+async fn scan_startup_retries_after_central_adapter_powers_on() {
+    let local_node_id = NodeId([1; 32]);
+    let remote_node_id = NodeId([5; 32]);
+
+    let (central_link, remote_peripheral_link) = MockLink::pair();
+    let runtime_central: Central<_> = Central::from_backend(central_link.central);
+    runtime_central.mock_emit_adapter_state(false);
+    let runtime_central_control = runtime_central.clone();
+    let remote_peripheral: Peripheral<_> =
+        Peripheral::from_backend(remote_peripheral_link.peripheral);
+    remote_peripheral
+        .add_service(&advertised_hint_service(&remote_node_id))
+        .await
+        .expect("add hint service");
+    remote_peripheral
+        .add_service(&identity_gatt_service(&remote_node_id))
+        .await
+        .expect("add remote identity service");
+    remote_peripheral
+        .start_advertising(&AdvertisingConfig {
+            local_name: "remote-peer".into(),
+            service_uuids: Vec::new(),
+        })
+        .await
+        .expect("start advertising");
+
+    let (_remote_central_link, peripheral_link) = MockLink::pair();
+    let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+
+    let components = BleRuntimeTask::spawn(
+        local_node_id,
+        runtime_central,
+        runtime_peripheral,
+        BleConfig::default(),
+    )
+    .expect("spawn runtime");
+    let (mut driver, _sender, _outbound, control, _notifier, runtime_task) =
+        components.into_parts();
+
+    sleep(Duration::from_millis(80)).await;
+    assert!(
+        driver
+            .drain_transport_ingress()
+            .expect("drain ingress")
+            .is_empty(),
+        "unpowered central must not start scanning"
+    );
+
+    runtime_central_control.mock_emit_adapter_state(true);
 
     let ingress = wait_for_ingress(&mut driver, 1).await;
     assert!(ingress.iter().any(|event| {
@@ -420,7 +621,10 @@ async fn sender_queue_fails_closed_when_dispatch_mailbox_is_full() {
         central,
         peripheral,
         BleConfig {
-            command_capacity: 1,
+            queue: BleQueueConfig {
+                command_capacity: 1,
+                ..BleQueueConfig::default()
+            },
             ..BleConfig::default()
         },
     )
@@ -899,6 +1103,88 @@ async fn central_opened_l2cap_upgrade_emits_updates_and_carries_framed_payloads(
 }
 
 #[tokio::test]
+async fn l2cap_writer_failure_downgrades_to_gatt_fallback() {
+    let local_node_id = NodeId([1; 32]);
+    let remote_node_id = NodeId([6; 32]);
+
+    let (central_link, remote_peripheral_link) = MockLink::pair();
+    let runtime_central: Central<_> = Central::from_backend(central_link.central);
+    let remote_peripheral: Peripheral<_> =
+        Peripheral::from_backend(remote_peripheral_link.peripheral);
+    let (remote_psm, mut remote_accept_stream) = remote_peripheral
+        .l2cap_listener()
+        .await
+        .expect("start remote l2cap listener");
+    remote_peripheral
+        .add_service(&advertised_hint_service(&remote_node_id))
+        .await
+        .expect("add hint service");
+    remote_peripheral
+        .add_service(&gatt_l2cap_service(&remote_node_id, remote_psm))
+        .await
+        .expect("add remote l2cap service");
+    remote_peripheral
+        .start_advertising(&AdvertisingConfig {
+            local_name: "remote-peer".into(),
+            service_uuids: Vec::new(),
+        })
+        .await
+        .expect("start advertising");
+
+    let (_remote_central_link, peripheral_link) = MockLink::pair();
+    let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+
+    let components = BleRuntimeTask::spawn(
+        local_node_id,
+        runtime_central,
+        runtime_peripheral,
+        BleConfig::default(),
+    )
+    .expect("spawn runtime");
+    let (mut driver, mut sender, mut outbound, control, _notifier, runtime_task) =
+        components.into_parts();
+
+    let (_device_id, accepted_channel) =
+        timeout(Duration::from_millis(250), remote_accept_stream.next())
+            .await
+            .expect("wait for accepted l2cap channel")
+            .expect("accept stream should stay open")
+            .expect("accept channel");
+    let mut accepted_channel = accepted_channel;
+
+    let mut remote_identity = [0_u8; 32];
+    accepted_channel
+        .read_exact(&mut remote_identity)
+        .await
+        .expect("read central identity");
+    assert_eq!(remote_identity, local_node_id.0);
+
+    let link_kinds = wait_for_link_kinds(&mut driver, 2).await;
+    assert_eq!(
+        link_kinds,
+        vec![TransportKind::BleGatt, TransportKind::BleL2cap]
+    );
+
+    let (remote_reader, remote_writer) = tokio::io::split(accepted_channel);
+    drop(remote_reader);
+    drop(remote_writer);
+
+    sender
+        .send_transport(
+            &l2cap_endpoint(&DeviceId::from("mock-peripheral")),
+            b"write-fails",
+        )
+        .expect("queue outbound");
+    let batch = outbound.drain();
+    control.dispatch(batch).await.expect("dispatch outbound");
+
+    let downgrade = wait_for_link_kinds(&mut driver, 1).await;
+    assert_eq!(downgrade, vec![TransportKind::BleGatt]);
+
+    shutdown_runtime(control, runtime_task).await;
+}
+
+#[tokio::test]
 async fn accepted_l2cap_channels_register_and_close_without_fake_gatt_downgrade() {
     let local_node_id = NodeId([4; 32]);
     let remote_node_id = NodeId([7; 32]);
@@ -1025,7 +1311,10 @@ async fn control_path_events_are_retried_after_ingress_overflow() {
         runtime_central,
         runtime_peripheral,
         BleConfig {
-            ingress_capacity: 1,
+            queue: BleQueueConfig {
+                ingress_capacity: 1,
+                ..BleQueueConfig::default()
+            },
             ..BleConfig::default()
         },
     )

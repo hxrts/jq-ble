@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use jacquard_core::{
-    DestinationId, NodeId, RouteId, RouteShapeVisibility, RoutingEngineId, Tick,
+    DestinationId, MulticastGroupId, NodeId, RouteId, RouteShapeVisibility, RoutingEngineId, Tick,
     TransportDeliveryMode, TransportKind,
 };
 
@@ -50,6 +50,8 @@ pub struct ActiveRouteBuilder {
     shape_visibility: RouteShapeVisibility,
     protocol_mix: Vec<TransportKind>,
     delivery_mode: TransportDeliveryMode,
+    multicast_group_id: Option<MulticastGroupId>,
+    multicast_receivers: Vec<NodeId>,
     delivery: ActiveRouteDelivery,
     observed_at_tick: Tick,
 }
@@ -83,6 +85,8 @@ impl ActiveRouteBuilder {
             shape_visibility: RouteShapeVisibility::ExplicitPath,
             protocol_mix: Vec::new(),
             delivery_mode: TransportDeliveryMode::Unicast,
+            multicast_group_id: None,
+            multicast_receivers: Vec::new(),
             delivery,
             observed_at_tick,
         }
@@ -123,6 +127,18 @@ impl ActiveRouteBuilder {
     }
 
     #[must_use]
+    pub fn with_multicast_group(
+        mut self,
+        group_id: MulticastGroupId,
+        receivers: impl IntoIterator<Item = NodeId>,
+    ) -> Self {
+        self.delivery_mode = TransportDeliveryMode::Multicast;
+        self.multicast_group_id = Some(group_id);
+        self.multicast_receivers = receivers.into_iter().collect();
+        self
+    }
+
+    #[must_use]
     pub fn with_shape_visibility(mut self, shape_visibility: RouteShapeVisibility) -> Self {
         self.shape_visibility = shape_visibility;
         self
@@ -139,6 +155,8 @@ impl ActiveRouteBuilder {
             shape_visibility: self.shape_visibility,
             protocol_mix: self.protocol_mix,
             delivery_mode: self.delivery_mode,
+            multicast_group_id: self.multicast_group_id,
+            multicast_receivers: self.multicast_receivers,
             delivery: self.delivery,
             observed_at_tick: self.observed_at_tick,
         }

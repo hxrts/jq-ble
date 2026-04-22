@@ -9,19 +9,20 @@ use std::time::{Duration, Instant};
 
 use jacquard_core::{
     LinkBuilder, LinkEndpoint, LinkRuntimeState, MulticastGroupId, NodeId, PartitionRecoveryClass,
-    RepairCapability, TransportDeliveryIntent, TransportDeliveryMode, TransportIngressEvent,
-    TransportKind,
+    RepairCapability, RouteAdmissionRejection, TransportDeliveryIntent, TransportDeliveryMode,
+    TransportIngressEvent, TransportKind,
 };
 use jacquard_host_support::{TransportIngressClass, dispatch_mailbox};
 use jq_client::test_support::{
     decode_client_payload_for_testing, encode_client_payload_for_testing,
 };
-use jq_client::{JacquardBleClient, JacquardBleSendStage};
+use jq_client::{BleClientError, JacquardBleClient, JacquardBleSendStage};
 use tokio::task::LocalSet;
 use tokio_stream::StreamExt;
 
 use common::{
     FakeTransport, TestTransportSender, ble_endpoint, local_only_topology, published_topology,
+    relay_topology,
 };
 
 fn payload_received(
@@ -51,6 +52,13 @@ fn link_observed(remote_node_id: NodeId, endpoint: LinkEndpoint) -> TransportIng
         evidence_class: jacquard_core::RoutingEvidenceClass::DirectObservation,
         origin_authentication: jacquard_core::OriginAuthenticationClass::Unauthenticated,
     }
+}
+
+fn notify_fanout_observed(remote_node_id: NodeId) -> TransportIngressEvent {
+    link_observed(
+        remote_node_id,
+        jq_client::link_profile::gatt_notify_fanout_endpoint(),
+    )
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -98,7 +106,49 @@ async fn send_flushes_a_payload_through_the_client_boundary() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn send_multicast_flushes_an_admitted_multicast_intent() {
+async fn send_queues_the_next_hop_selected_by_the_admitted_route() {
+    LocalSet::new()
+        .run_until(async {
+            let local_node_id = NodeId([1; 32]);
+            let relay_node_id = NodeId([2; 32]);
+            let destination_node_id = NodeId([3; 32]);
+            let (outbound_tx, outbound_rx) = dispatch_mailbox(64);
+            let transport_sender = TestTransportSender {
+                outbound: outbound_tx,
+            };
+            let transport = FakeTransport::new(outbound_rx);
+            let flushed = transport.flushed.clone();
+            let client = JacquardBleClient::new_with_transport_for_testing(
+                local_node_id,
+                relay_topology(),
+                transport,
+                transport_sender,
+            );
+
+            let receipt = client
+                .send(destination_node_id, b"via admitted next hop")
+                .await
+                .expect("send through admitted route");
+
+            assert_eq!(receipt.destination_node_id, destination_node_id);
+            assert_eq!(receipt.next_hop_node_id, relay_node_id);
+            assert_ne!(receipt.next_hop_node_id, destination_node_id);
+
+            let flushed = flushed.lock().expect("flushed frames");
+            let frame = flushed
+                .iter()
+                .find(|frame| {
+                    decode_client_payload_for_testing(&frame.payload).as_deref()
+                        == Some(b"via admitted next hop".as_slice())
+                })
+                .expect("unicast frame flushed");
+            assert_eq!(frame.intent.endpoint(), &receipt.endpoint);
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn send_multicast_rejects_without_observed_subscribers() {
     LocalSet::new()
         .run_until(async {
             let local_node_id = NodeId([1; 32]);
@@ -116,6 +166,120 @@ async fn send_multicast_flushes_an_admitted_multicast_intent() {
                 transport,
                 transport_sender,
             );
+
+            let error = client
+                .send_multicast(group_id, receivers, b"hello multicast")
+                .await
+                .expect_err("multicast should require observed subscribers");
+
+            assert!(matches!(
+                error,
+                BleClientError::DeliveryAdmission(
+                    RouteAdmissionRejection::DeliveryAssumptionUnsupported
+                )
+            ));
+            assert!(flushed.lock().expect("flushed frames").is_empty());
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn send_multicast_rejects_partial_observed_subscriber_coverage() {
+    LocalSet::new()
+        .run_until(async {
+            let local_node_id = NodeId([1; 32]);
+            let receivers = vec![NodeId([2; 32]), NodeId([3; 32])];
+            let group_id = MulticastGroupId([9; 16]);
+            let (outbound_tx, outbound_rx) = dispatch_mailbox(64);
+            let transport_sender = TestTransportSender {
+                outbound: outbound_tx,
+            };
+            let transport = FakeTransport::new(outbound_rx);
+            let ingress_sender = transport.ingress_sender.clone();
+            let flushed = transport.flushed.clone();
+            let client = JacquardBleClient::new_with_transport_for_testing(
+                local_node_id,
+                published_topology(),
+                transport,
+                transport_sender,
+            );
+            let mut topology_stream = Box::pin(client.topology_stream());
+            let _initial = topology_stream.next().await.expect("initial topology");
+
+            ingress_sender
+                .emit(
+                    TransportIngressClass::Control,
+                    notify_fanout_observed(receivers[0]),
+                )
+                .expect("emit observed subscriber");
+            ingress_sender
+                .emit(
+                    TransportIngressClass::Control,
+                    link_observed(receivers[0], ble_endpoint(2, TransportKind::BleGatt)),
+                )
+                .expect("emit topology observation");
+            let _updated = tokio::time::timeout(Duration::from_millis(500), topology_stream.next())
+                .await
+                .expect("fanout observation should be processed")
+                .expect("topology update");
+
+            let error = client
+                .send_multicast(group_id, receivers, b"hello multicast")
+                .await
+                .expect_err("multicast should require all requested receivers");
+
+            assert!(matches!(
+                error,
+                BleClientError::DeliveryAdmission(
+                    RouteAdmissionRejection::DeliveryAssumptionUnsupported
+                )
+            ));
+            assert!(flushed.lock().expect("flushed frames").is_empty());
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn send_multicast_flushes_when_all_receivers_have_observed_subscribers() {
+    LocalSet::new()
+        .run_until(async {
+            let local_node_id = NodeId([1; 32]);
+            let receivers = vec![NodeId([2; 32]), NodeId([3; 32])];
+            let group_id = MulticastGroupId([9; 16]);
+            let (outbound_tx, outbound_rx) = dispatch_mailbox(64);
+            let transport_sender = TestTransportSender {
+                outbound: outbound_tx,
+            };
+            let transport = FakeTransport::new(outbound_rx);
+            let ingress_sender = transport.ingress_sender.clone();
+            let flushed = transport.flushed.clone();
+            let client = JacquardBleClient::new_with_transport_for_testing(
+                local_node_id,
+                published_topology(),
+                transport,
+                transport_sender,
+            );
+            let mut topology_stream = Box::pin(client.topology_stream());
+            let _initial = topology_stream.next().await.expect("initial topology");
+
+            for receiver in &receivers {
+                ingress_sender
+                    .emit(
+                        TransportIngressClass::Control,
+                        notify_fanout_observed(*receiver),
+                    )
+                    .expect("emit observed subscriber");
+            }
+            ingress_sender
+                .emit(
+                    TransportIngressClass::Control,
+                    link_observed(receivers[0], ble_endpoint(2, TransportKind::BleGatt)),
+                )
+                .expect("emit topology observation");
+            let _updated = tokio::time::timeout(Duration::from_millis(500), topology_stream.next())
+                .await
+                .expect("fanout observations should be processed")
+                .expect("topology update");
 
             let receipt = client
                 .send_multicast(group_id, receivers.clone(), b"hello multicast")

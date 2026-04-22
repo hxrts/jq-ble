@@ -26,7 +26,7 @@ Usage:
   ./scripts/release-publish.sh --version <version> [options]
 
 Options:
-  --version <version>   Release version (required)
+  --version <version>   Release version (defaults to the first release package version)
   --dry-run             Run all publishing steps with --dry-run
   --skip-ci             Skip just ci-dry-run preflight checks
   --no-tag              Skip git tag creation
@@ -65,6 +65,13 @@ extract_manifest_version() {
       exit
     }
   ' "${manifest_path}"
+}
+
+default_release_version() {
+  local first_package first_manifest
+  first_package="${RELEASE_PACKAGES[0]}"
+  first_manifest="$(manifest_path "${first_package}")" || die "unknown package: ${first_package}"
+  extract_manifest_version "${first_manifest}"
 }
 
 assert_version_format() {
@@ -172,6 +179,10 @@ wait_for_package_visibility() {
 }
 
 create_release_tag() {
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "== dry-run: skipping git tag creation =="
+    return
+  fi
   if [[ "${CREATE_TAG}" -eq 0 ]]; then
     return
   fi
@@ -257,7 +268,7 @@ main() {
   done
 
   if [[ -z "${VERSION}" ]]; then
-    die "--version is required"
+    VERSION="$(default_release_version)"
   fi
 
   assert_version_format "${VERSION}"

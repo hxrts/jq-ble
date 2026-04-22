@@ -212,7 +212,7 @@ dylint-trait-purity:
 # Usage:
 #   just release <version> [dry_run] [skip_ci] [no_tag] [push] [allow_dirty] [no_require_main]
 # Example:
-#   just release 0.1.0 true true true false true false
+#   just release 0.1.0 true true false false true true
 release \
   version="" \
   dry_run="false" \

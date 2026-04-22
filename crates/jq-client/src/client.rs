@@ -34,6 +34,7 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::framing::{decode_client_payload, encode_client_payload};
+use crate::multicast::{MulticastAdmission, is_multicast_fanout_observation};
 use crate::projector::TopologyProjector;
 use crate::routing::{
     JacquardBleRouter, build_router, default_objective, initial_topology, policy_inputs_for,
@@ -106,9 +107,16 @@ enum ClientCommand {
     },
 }
 
+#[derive(Clone)]
 struct QueuedTransportCommand {
     next_hop_node_id: NodeId,
     intent: TransportDeliveryIntent,
+}
+
+#[derive(Clone)]
+struct CachedRoute {
+    route_id: RouteId,
+    command: QueuedTransportCommand,
 }
 
 struct ClientTask<Transport, Sender> {
@@ -121,7 +129,8 @@ struct ClientTask<Transport, Sender> {
     topology: Arc<Mutex<MeshTopology>>,
     topology_updates: broadcast::Sender<MeshTopology>,
     projector: TopologyProjector,
-    route_cache: BTreeMap<NodeId, jacquard_core::RouteId>,
+    multicast_admission: MulticastAdmission,
+    route_cache: BTreeMap<NodeId, CachedRoute>,
     tick_duration_ms: Duration,
     shutdown: watch::Receiver<bool>,
     startup: Option<std_mpsc::Sender<Result<(), BleClientError>>>,
@@ -217,14 +226,9 @@ where
             group_id,
             receivers: receivers.clone(),
         };
-        let support = jq_link_profile::gatt_notify_multicast_support(
-            self.local_node_id,
-            group_id,
-            receivers.clone(),
-            Tick(0),
-            jacquard_core::OrderStamp(0),
-        )
-        .ok_or(RouteAdmissionRejection::DeliveryAssumptionUnsupported)?;
+        let support =
+            self.multicast_admission
+                .support_for(self.local_node_id, group_id, &receivers)?;
         let intent = admitted_delivery_intent(
             &objective,
             &support,
@@ -245,22 +249,22 @@ where
         to: NodeId,
         payload: &[u8],
     ) -> Option<Result<JacquardBleSendReceipt, BleClientError>> {
-        let route_id = self.route_cache.get(&to).copied()?;
-        let route = self.bridge.router_mut().active_route(&route_id).cloned()?;
+        let cached = self.route_cache.get(&to).cloned()?;
+        let route_id = cached.route_id;
+        self.bridge.router_mut().active_route(&route_id)?;
         if self
             .bridge
             .router_mut()
             .forward_payload(&route_id, payload)
             .is_ok()
         {
-            let queued = match self.queue_payload_on_route(&route, payload) {
-                Ok(queued) => queued,
-                Err(error) => return Some(Err(error)),
-            };
+            if let Err(error) = self.queue_transport_command(&cached.command, payload) {
+                return Some(Err(error));
+            }
             return Some(
                 self.drive_bridge_round()
                     .await
-                    .map(|_| send_receipt(to, route_id, queued)),
+                    .map(|_| send_receipt(to, route_id, cached.command)),
             );
         }
         // Route is stale; evict it and signal that the slow path is needed.
@@ -280,8 +284,15 @@ where
         self.bridge
             .router_mut()
             .forward_payload(&route_id, payload)?;
-        let queued = self.queue_payload_on_route(&route, payload)?;
-        self.route_cache.insert(to, route_id);
+        let queued = self.command_for_route(&route)?;
+        self.queue_transport_command(&queued, payload)?;
+        self.route_cache.insert(
+            to,
+            CachedRoute {
+                route_id,
+                command: queued.clone(),
+            },
+        );
         self.drive_bridge_round().await?;
         if topology_changed {
             self.publish_topology();
@@ -289,10 +300,9 @@ where
         Ok(send_receipt(to, route_id, queued))
     }
 
-    fn queue_payload_on_route(
-        &mut self,
+    fn command_for_route(
+        &self,
         route: &MaterializedRoute,
-        payload: &[u8],
     ) -> Result<QueuedTransportCommand, BleClientError> {
         let next_hop_node_id = selected_neighbor_from_backend_route_id(
             &route.identity.admission.backend_ref.backend_route_id,
@@ -305,13 +315,20 @@ where
             .map(|edge| edge.observation.value.endpoint.clone())
             .ok_or_else(no_route_candidate)?;
         let intent = TransportDeliveryIntent::unicast(endpoint);
-        self.transport_sender
-            .send_transport_to(&intent, payload)
-            .map_err(BleClientError::Transport)?;
         Ok(QueuedTransportCommand {
             next_hop_node_id,
             intent,
         })
+    }
+
+    fn queue_transport_command(
+        &mut self,
+        queued: &QueuedTransportCommand,
+        payload: &[u8],
+    ) -> Result<(), BleClientError> {
+        self.transport_sender
+            .send_transport_to(&queued.intent, payload)
+            .map_err(BleClientError::Transport)
     }
 
     async fn drive_bridge_round(&mut self) -> Result<BleBridgeProgress, BleClientError> {
@@ -350,6 +367,11 @@ where
     fn apply_bridge_report(&mut self, report: &BleBridgeRoundReport) -> bool {
         let mut changed = false;
         for observation in &report.ingested_transport_observations {
+            self.multicast_admission
+                .ingest_transport_observation(observation);
+            if is_multicast_fanout_observation(observation) {
+                continue;
+            }
             changed |= self.projector.ingest_transport_observation(observation);
         }
         self.publish_incoming(&report.ingested_transport_observations);
@@ -686,6 +708,7 @@ impl JacquardBleClient {
                     topology: topology_task_state,
                     topology_updates: topology_updates_task,
                     projector,
+                    multicast_admission: MulticastAdmission::default(),
                     route_cache: BTreeMap::new(),
                     tick_duration_ms,
                     shutdown: shutdown_rx,

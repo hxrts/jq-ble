@@ -13,9 +13,13 @@ Unicast sends use point-to-point BLE paths: L2CAP when available, otherwise cent
 `JacquardBleService::new_with_ble_config(...)` when a host needs platform
 policy:
 
-- Apple/CoreBluetooth restore identifiers for central and peripheral roles.
-- Optional startup readiness timeout before scanning or publishing services.
-- Scan service UUID filters and low-latency/low-power scan mode.
+- `BleConfig::queue` controls ingress and outbound command mailbox capacity.
+- `BleConfig::restoration` carries Apple/CoreBluetooth restore identifiers for
+  central and peripheral roles.
+- `BleConfig::startup` carries optional readiness timeout policy before
+  scanning or publishing services.
+- `BleConfig::scan` carries scan service UUID filters and low-latency/low-power
+  scan mode.
 
 When restore identifiers are configured, jq-ble constructs `blew` with
 `with_config`, drains restored state before issuing new BLE work, and republishes
@@ -45,6 +49,23 @@ cargo test --workspace
 # Run the full local CI dry run
 just ci-dry-run
 ```
+
+## Release
+
+The Nix dev shell exports the Cargo registry token from
+`~/.local/state/secrets/cargo-registry-token` when that file exists.
+
+```sh
+# Validate the release path without publishing or tagging
+just release 0.1.0 true true false false true true
+
+# Publish crates, tag v0.1.0, push branch and tag, then let GitHub create the release
+just release 0.1.0 false false false true false false
+```
+
+Published crates are listed in `scripts/release-packages.sh`. Pushing the
+`v*` tag triggers `.github/workflows/release.yml`, which creates the GitHub
+release with generated release notes.
 
 ## License
 

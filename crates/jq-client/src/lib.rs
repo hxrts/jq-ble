@@ -11,6 +11,7 @@ mod bridge;
 mod client;
 mod effects;
 mod framing;
+mod multicast;
 mod projector;
 mod routing;
 
@@ -24,7 +25,10 @@ pub use client::{
     JacquardBleSendStage,
 };
 pub use effects::BleRuntimeEffects;
-pub use jq_link_profile::{self as link_profile, BleConfig, BleScanMode};
+pub use jq_link_profile::{
+    self as link_profile, BleConfig, BleQueueConfig, BleRestorationConfig, BleScanConfig,
+    BleScanMode, BleStartupConfig,
+};
 pub use jq_node_profile as node_profile;
 pub use routing::JacquardBleRouter;
 

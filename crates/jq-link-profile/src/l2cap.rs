@@ -77,6 +77,7 @@ pub(crate) fn spawn_l2cap_channel_tasks(
     let (outbound_tx, mut outbound_rx) =
         mpsc::channel::<Vec<u8>>(DEFAULT_COMMAND_CAPACITY as usize);
     let recv_tx = event_tx.clone();
+    let write_tx = event_tx;
 
     // Reader task: decode length-prefixed frames and forward them to the runtime task's select loop.
     tokio::spawn(async move {
@@ -107,10 +108,20 @@ pub(crate) fn spawn_l2cap_channel_tasks(
 
     // Writer task: encode and send outbound payloads received from the dispatch path.
     tokio::spawn(async move {
+        let mut write_failed = false;
         while let Some(payload) = outbound_rx.recv().await {
             if framed_writer.send(Bytes::from(payload)).await.is_err() {
+                write_failed = true;
                 break;
             }
+        }
+        if write_failed {
+            // Signal closure so the runtime downgrades away from a write-dead L2CAP channel even
+            // if the read half has not observed EOF yet.
+            // allow-ignored-result: closure notification is best-effort when the runtime task already shut down
+            let _ = write_tx
+                .send(L2capRuntimeEvent::ChannelClosed { channel_id })
+                .await;
         }
     });
 

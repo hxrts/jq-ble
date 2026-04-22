@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use blew::central::backend::CentralBackend;
 use blew::central::{Central, CentralEvent, DisconnectCause, WriteType};
+use blew::error::BlewError;
 use blew::l2cap::{L2capChannel, types::Psm};
 use blew::peripheral::backend::PeripheralBackend;
-use blew::peripheral::{Peripheral, PeripheralRequest, PeripheralStateEvent};
+use blew::peripheral::{AdvertisingConfig, Peripheral, PeripheralRequest, PeripheralStateEvent};
 use blew::types::{BleDevice, DeviceId};
 use jacquard_core::{LinkEndpoint, NodeId, TransportDeliveryIntent, TransportIngressEvent};
 use jacquard_host_support::{
@@ -28,16 +29,18 @@ use crate::cast::{raw_ble_link_faulted_event, raw_ble_link_observed_event};
 use crate::gatt::{
     JACQUARD_C2P_CHAR_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
     JACQUARD_PSM_CHAR_UUID, gatt_endpoint, gatt_fallback_service, gatt_l2cap_service,
-    hint_matches_node_id, l2cap_endpoint, parse_discovery_hint,
+    gatt_notify_fanout_endpoint, hint_matches_node_id, l2cap_endpoint, parse_discovery_hint,
 };
 use crate::l2cap::{
     ActiveL2capChannel, L2capAcceptStream, L2capRuntimeEvent, read_l2cap_identity,
     spawn_l2cap_channel_tasks, write_l2cap_identity,
 };
+use crate::notify;
 use crate::session::{
     device_id_from_endpoint, endpoint_for_session, resolve_remote_node_id, resolve_remote_psm,
     session_references_device,
 };
+use crate::startup::{AdapterPowerState, BleStartupState, StartupStep};
 use crate::transport::{
     BleChannelId, BleConfig, BleDriverCommand, BleDriverControl, BleLinkError, BleNotifySubscriber,
     BleOutboundCommand, BlePeerKey, BleRestoredState, BleRuntimeParts, BleSession,
@@ -47,6 +50,7 @@ use crate::transport::{
 
 // Short sleep between deferred control ingress retries; keeps the select loop responsive without busy-looping.
 const DEFERRED_CONTROL_RETRY_INTERVAL_MS: Duration = Duration::from_millis(5);
+const STARTUP_RETRY_INTERVAL_MS: Duration = Duration::from_millis(250);
 
 type CentralEvents<CB> = EventStream<CentralEvent, <CB as CentralBackend>::EventStream>;
 type PeripheralStateEvents<PB> =
@@ -73,6 +77,7 @@ pub struct BleRuntimeTask<CB: CentralBackend, PB: PeripheralBackend> {
     local_psm: Option<Psm>,
     config: BleConfig,
     restored_state: BleRestoredState,
+    startup: BleStartupState,
     deferred_control_ingress: VecDeque<TransportIngressEvent>,
 }
 
@@ -106,18 +111,18 @@ where
         restored_state: BleRestoredState,
     ) -> Result<(Self, BleRuntimeParts), BleLinkError> {
         // recursion-exception: constructor assembles runtime-owned state while retaining the conventional `new` entrypoint
-        if config.ingress_capacity == 0 {
+        if config.queue.ingress_capacity == 0 {
             return Err(BleLinkError::ZeroIngressCapacity);
         }
-        if config.command_capacity == 0 {
+        if config.queue.command_capacity == 0 {
             return Err(BleLinkError::ZeroCommandCapacity);
         }
 
         let central_events = central.events();
         let peripheral_state_events = peripheral.state_events();
         let peripheral_requests = peripheral.take_requests();
-        let ingress_capacity = config.ingress_capacity as usize;
-        let command_capacity = config.command_capacity as usize;
+        let ingress_capacity = config.queue.ingress_capacity as usize;
+        let command_capacity = config.queue.command_capacity as usize;
         let (ingress_tx, ingress_rx, notifier) = transport_ingress_mailbox(ingress_capacity);
         let (command_tx, command_rx) = mpsc::channel(command_capacity);
         let (l2cap_events_tx, l2cap_events_rx) = mpsc::channel(command_capacity);
@@ -146,6 +151,7 @@ where
             local_psm: None,
             config,
             restored_state,
+            startup: BleStartupState::default(),
             deferred_control_ingress: VecDeque::new(),
         };
 
@@ -241,31 +247,7 @@ where
 
     async fn run(mut self) {
         self.rehydrate_restored_state().await;
-        // Attempt L2CAP listener setup first so the PSM can be embedded in the advertised GATT service.
-        if let Ok((psm, stream)) = self.peripheral.l2cap_listener().await {
-            self.local_psm = Some(psm);
-            self.l2cap_accept_stream = Some(Box::pin(stream));
-        }
-
-        // Advertise either the full L2CAP service or the GATT-only fallback depending on platform support.
-        // Advertising carries discovery/capability hints only; routed payloads stay on GATT writes or L2CAP.
-        let service = self.local_psm.map_or_else(
-            || gatt_fallback_service(&self.local_node_id),
-            |psm| gatt_l2cap_service(&self.local_node_id, psm),
-        );
-        // Hardware errors here are non-fatal; the event loop continues and peers can still connect.
-        // allow-ignored-result: advertising may fail transiently and the runtime can still service inbound work
-        if !self
-            .restored_state
-            .peripheral_service_uuids
-            .contains(&service.uuid)
-        {
-            // allow-ignored-result: service registration may fail transiently and the runtime can still service inbound work
-            let _ = self.peripheral.add_service(&service).await;
-        }
-        // Scan errors are non-fatal; discovery resumes on the next topology refresh.
-        // allow-ignored-result: scan startup may fail transiently and discovery will retry on later rounds
-        let _ = self.central.start_scan(self.config.scan_filter()).await;
+        self.try_startup().await;
 
         loop {
             self.flush_deferred_control_ingress();
@@ -275,6 +257,13 @@ where
                     std::future::pending::<()>().await;
                 } else {
                     tokio::time::sleep(DEFERRED_CONTROL_RETRY_INTERVAL_MS).await;
+                }
+            };
+            let retry_startup = async {
+                if self.startup.retry_due() {
+                    tokio::time::sleep(STARTUP_RETRY_INTERVAL_MS).await;
+                } else {
+                    std::future::pending::<()>().await;
                 }
             };
             tokio::select! {
@@ -287,7 +276,7 @@ where
                     self.handle_central_event(event).await;
                 }
                 Some(event) = self.peripheral_state_events.next() => {
-                    self.handle_peripheral_state_event(event);
+                    self.handle_peripheral_state_event(event).await;
                 }
                 request = async {
                     match self.peripheral_requests.as_mut() {
@@ -314,9 +303,118 @@ where
                     self.handle_l2cap_runtime_event(l2cap_event);
                 }
                 _ = retry_deferred_control => {}
+                _ = retry_startup => {
+                    self.try_startup().await;
+                }
                 else => break,
             }
         }
+    }
+
+    async fn try_startup(&mut self) {
+        let peripheral_powered = self.peripheral.is_powered().await.unwrap_or(false);
+        if peripheral_powered {
+            self.try_start_l2cap_listener().await;
+            self.try_start_gatt_service().await;
+            self.try_start_advertising().await;
+        } else {
+            self.startup
+                .peripheral_power_changed(AdapterPowerState::PoweredOff);
+        }
+
+        let central_powered = self.central.is_powered().await.unwrap_or(false);
+        if central_powered {
+            self.try_start_scan().await;
+        } else {
+            self.startup
+                .central_power_changed(AdapterPowerState::PoweredOff);
+        }
+    }
+
+    async fn try_start_l2cap_listener(&mut self) {
+        match self.startup.l2cap_listener {
+            StartupStep::Started | StartupStep::Unsupported | StartupStep::WaitingForPower => {
+                return;
+            }
+            StartupStep::Pending | StartupStep::Retry => {}
+        }
+
+        match self.peripheral.l2cap_listener().await {
+            Ok((psm, stream)) => {
+                self.local_psm = Some(psm);
+                self.l2cap_accept_stream = Some(Box::pin(stream));
+                self.startup.l2cap_listener = StartupStep::Started;
+            }
+            Err(BlewError::NotSupported) => {
+                self.startup.l2cap_listener = StartupStep::Unsupported;
+            }
+            Err(_) => {
+                self.startup.l2cap_listener = StartupStep::Retry;
+            }
+        }
+    }
+
+    async fn try_start_gatt_service(&mut self) {
+        match self.startup.gatt_service {
+            StartupStep::Started | StartupStep::WaitingForPower => return,
+            StartupStep::Pending | StartupStep::Retry | StartupStep::Unsupported => {}
+        }
+        if matches!(
+            self.startup.l2cap_listener,
+            StartupStep::Pending | StartupStep::Retry
+        ) {
+            return;
+        }
+
+        let service = self.startup_gatt_service();
+        if self
+            .restored_state
+            .peripheral_service_uuids
+            .contains(&service.uuid)
+        {
+            self.startup.gatt_service = StartupStep::Started;
+            return;
+        }
+        self.startup.gatt_service =
+            StartupStep::from_start_result(self.peripheral.add_service(&service).await.as_ref());
+    }
+
+    async fn try_start_advertising(&mut self) {
+        match self.startup.advertising {
+            StartupStep::Started | StartupStep::WaitingForPower => return,
+            StartupStep::Pending | StartupStep::Retry | StartupStep::Unsupported => {}
+        }
+        if self.startup.gatt_service != StartupStep::Started {
+            return;
+        }
+        let service = self.startup_gatt_service();
+        let config = AdvertisingConfig {
+            local_name: "jq-ble".into(),
+            service_uuids: vec![service.uuid],
+        };
+        self.startup.advertising = StartupStep::from_start_result(
+            self.peripheral.start_advertising(&config).await.as_ref(),
+        );
+    }
+
+    async fn try_start_scan(&mut self) {
+        match self.startup.scan {
+            StartupStep::Started | StartupStep::WaitingForPower => return,
+            StartupStep::Pending | StartupStep::Retry | StartupStep::Unsupported => {}
+        }
+        self.startup.scan = StartupStep::from_start_result(
+            self.central
+                .start_scan(self.config.scan_filter())
+                .await
+                .as_ref(),
+        );
+    }
+
+    fn startup_gatt_service(&self) -> blew::gatt::service::GattService {
+        self.local_psm.map_or_else(
+            || gatt_fallback_service(&self.local_node_id),
+            |psm| gatt_l2cap_service(&self.local_node_id, psm),
+        )
     }
 
     async fn rehydrate_restored_state(&mut self) {
@@ -329,6 +427,29 @@ where
     async fn handle_restored_device(&mut self, device: BleDevice) {
         if parse_discovery_hint(&device.services).is_some() {
             self.handle_device_discovered(device).await;
+            return;
+        }
+
+        let key = BlePeerKey::from(&device.id);
+        if self.pending_claims.contains(&key) {
+            return;
+        }
+        let Ok(_claim_guard) = self.pending_claims.try_claim(key.clone()) else {
+            return;
+        };
+
+        // Restored CoreBluetooth devices may not carry the original advertisement
+        // payload. Treat them as previously known candidates and prove identity
+        // by reading the Jacquard identity characteristic directly.
+        // allow-ignored-result: connect is best-effort; identity read below is the actual admission gate
+        let _ = self.central.connect(&device.id).await;
+        match resolve_remote_node_id(&self.central, &device.id).await {
+            Ok(node_id) => {
+                self.install_resolved_peer(key, node_id, device.id).await;
+            }
+            Err(_) => {
+                refresh_gatt_cache(&self.central, &device.id).await;
+            }
         }
     }
 
@@ -344,7 +465,13 @@ where
 
     async fn handle_central_event(&mut self, event: CentralEvent) {
         match event {
-            CentralEvent::AdapterStateChanged { .. } => {}
+            CentralEvent::AdapterStateChanged { powered } => {
+                self.startup
+                    .central_power_changed(AdapterPowerState::from(powered));
+                if powered {
+                    self.try_startup().await;
+                }
+            }
             CentralEvent::DeviceDiscovered(device) => {
                 self.handle_device_discovered(device).await;
             }
@@ -417,6 +544,15 @@ where
             return;
         }
 
+        self.install_resolved_peer(key, node_id, device_id).await;
+    }
+
+    async fn install_resolved_peer(
+        &mut self,
+        key: BlePeerKey,
+        node_id: NodeId,
+        device_id: DeviceId,
+    ) {
         self.peers.resolve(key, node_id);
         // Install GATT session immediately so the peer is reachable before we attempt the L2CAP upgrade.
         self.install_gatt_session(node_id, device_id.clone()).await;
@@ -500,7 +636,7 @@ where
         }
     }
 
-    fn handle_peripheral_state_event(&mut self, event: PeripheralStateEvent) {
+    async fn handle_peripheral_state_event(&mut self, event: PeripheralStateEvent) {
         match event {
             PeripheralStateEvent::SubscriptionChanged {
                 client_id,
@@ -509,8 +645,21 @@ where
             } if char_uuid == JACQUARD_P2C_CHAR_UUID && subscribed => {
                 self.handle_p2c_subscription(client_id);
             }
-            PeripheralStateEvent::SubscriptionChanged { .. }
-            | PeripheralStateEvent::AdapterStateChanged { .. } => {}
+            PeripheralStateEvent::SubscriptionChanged {
+                client_id,
+                char_uuid,
+                subscribed,
+            } if char_uuid == JACQUARD_P2C_CHAR_UUID && !subscribed => {
+                self.handle_p2c_unsubscription(client_id);
+            }
+            PeripheralStateEvent::AdapterStateChanged { powered } => {
+                self.startup
+                    .peripheral_power_changed(AdapterPowerState::from(powered));
+                if powered {
+                    self.try_startup().await;
+                }
+            }
+            PeripheralStateEvent::SubscriptionChanged { .. } => {}
         }
     }
 
@@ -550,6 +699,25 @@ where
                 .entry(node_id)
                 .and_modify(|sessions| sessions.install_gatt_subscription(subscriber.clone()))
                 .or_insert_with(|| PeerSessions::gatt_notify_fanout(subscriber));
+            self.emit_control_event(raw_ble_link_observed_event(
+                node_id,
+                gatt_notify_fanout_endpoint(),
+            ));
+        }
+    }
+
+    fn handle_p2c_unsubscription(&mut self, client_id: DeviceId) {
+        if let Some(node_id) = self.resolved_node_id_for_device(&client_id) {
+            let removed = self
+                .sessions
+                .get_mut(&node_id)
+                .is_some_and(|sessions| sessions.remove_gatt_subscription(&client_id));
+            if removed {
+                self.emit_control_event(raw_ble_link_faulted_event(
+                    node_id,
+                    gatt_notify_fanout_endpoint(),
+                ));
+            }
         }
     }
 
@@ -660,7 +828,8 @@ where
         let Some(device_ids) = self.notify_subscriber_device_ids(receivers) else {
             return;
         };
-        let Some(notify_device_ids) = self.platform_notify_device_ids(receivers, &device_ids)
+        let Some(notify_device_ids) =
+            notify::platform_notify_device_ids(&self.sessions, receivers, &device_ids)
         else {
             return;
         };
@@ -686,40 +855,6 @@ where
             device_ids.push(device_id.clone());
         }
         Some(device_ids)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn platform_notify_device_ids(
-        &self,
-        receivers: &[NodeId],
-        device_ids: &[DeviceId],
-    ) -> Option<Vec<DeviceId>> {
-        let requested = receivers
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-        let all_subscribers = self
-            .sessions
-            .iter()
-            .filter_map(|(node_id, sessions)| {
-                sessions.notify_subscriber_device_id().map(|_| *node_id)
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        if requested != all_subscribers {
-            return None;
-        }
-        // BlueZ cannot target a specific subscribed central for GATT notify, so the Linux backend
-        // broadcasts once to the characteristic after the receiver set is proven to match all subscribers.
-        device_ids.first().cloned().map(|device_id| vec![device_id])
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn platform_notify_device_ids(
-        &self,
-        _receivers: &[NodeId],
-        device_ids: &[DeviceId],
-    ) -> Option<Vec<DeviceId>> {
-        Some(device_ids.to_vec())
     }
 
     /// Attempts to send `payload` via `session`. Returns `Some(channel_id)` if the L2CAP channel
