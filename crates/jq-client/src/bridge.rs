@@ -322,6 +322,9 @@ where
         // recursion-exception: same-name forwarding keeps round advancement on the bridge surface
         // Stamp all buffered ingress events with the current logical tick before handing them to the router.
         let observed_at_tick = self.clock.advance_tick();
+        // Capture before draining so arrivals between the drain and subsequent wait setup still
+        // appear as a notifier change instead of being folded into the parked snapshot.
+        let notifier_snapshot = self.transport.notifier().snapshot();
         self.stage_transport_ingress(observed_at_tick)?;
         let ingested = self
             .pending_transport_observations
@@ -349,8 +352,7 @@ where
                 ),
                 pending_transport_commands: narrow_count(self.transport.pending_outbound()),
                 dropped_transport_observations: narrow_count(dropped_transport_observations),
-                // Snapshot taken here so BlockOnNotifier can detect races between this check and parking.
-                notifier_snapshot: self.transport.notifier().snapshot(),
+                notifier_snapshot,
             }));
         }
 

@@ -18,7 +18,7 @@ use jq_client::{BleBridgeError, BleClientError, JacquardBleClient};
 use jq_node_profile::MeshTopology;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, Semaphore, broadcast};
 
 pub const JACQUARD_BLE_INVITE_SCHEME: &str = "jq-ble";
 // Magic prefix distinguishes application frames from internal Jacquard routing traffic.
@@ -27,6 +27,7 @@ const INVITE_ACTION_PATH: &str = "/add-peer/";
 // Jacquard routes converge asynchronously; retry briefly while the mesh catches up.
 const RELAY_RETRY_INTERVAL_MS: Duration = Duration::from_millis(25);
 const RELAY_RETRY_ATTEMPTS_MAX: usize = 200;
+const RELAY_INFLIGHT_MAX: usize = 64;
 // Capacity of the broadcast channel that fans incoming messages out to multiple subscribers.
 const INCOMING_BROADCAST_CAPACITY: usize = 64;
 
@@ -177,11 +178,13 @@ impl JacquardBleService {
         let (incoming, _) = broadcast::channel(INCOMING_BROADCAST_CAPACITY);
         let (introduced_peer_updates, _) = broadcast::channel(INCOMING_BROADCAST_CAPACITY);
         let (relay_drops, _) = broadcast::channel(INCOMING_BROADCAST_CAPACITY);
+        let relay_inflight = Arc::new(Semaphore::new(RELAY_INFLIGHT_MAX));
         // The pump task demuxes raw Jacquard payloads into application messages and relay forwards.
         let pump_task = spawn_application_pump(
             Arc::clone(&client),
             incoming.clone(),
             relay_drops.clone(),
+            Arc::clone(&relay_inflight),
             relay_retry_policy,
         );
         Self {
@@ -462,6 +465,7 @@ fn spawn_application_pump(
     client: Arc<JacquardBleClient>,
     incoming: broadcast::Sender<JacquardIncomingMessage>,
     relay_drops: broadcast::Sender<JacquardRelayDrop>,
+    relay_inflight: Arc<Semaphore>,
     relay_retry_policy: RelayRetryPolicy,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -492,7 +496,11 @@ fn spawn_application_pump(
                 from_node_id: frame.from_node_id,
                 destination_node_id: frame.destination_node_id,
             };
+            let Ok(relay_permit) = Arc::clone(&relay_inflight).acquire_owned().await else {
+                break;
+            };
             tokio::spawn(async move {
+                let _relay_permit = relay_permit;
                 if !relay_framed_payload(
                     &relay_client,
                     frame.destination_node_id,
@@ -593,14 +601,22 @@ impl JacquardBleHostState {
         &self,
         local_node_id: NodeId,
     ) -> Result<Arc<JacquardBleService>, JacquardBleServiceError> {
-        let mut guard = self.service.lock().await;
-        if let Some(service) = guard.as_ref() {
-            return Err(JacquardBleServiceError::AlreadyStarted {
-                local_node_id: service.local_node_id(),
-            });
+        {
+            let guard = self.service.lock().await;
+            if let Some(service) = guard.as_ref() {
+                return Err(JacquardBleServiceError::AlreadyStarted {
+                    local_node_id: service.local_node_id(),
+                });
+            }
         }
 
         let service = Arc::new(JacquardBleService::new(local_node_id).await?);
+        let mut guard = self.service.lock().await;
+        if let Some(existing) = guard.as_ref() {
+            return Err(JacquardBleServiceError::AlreadyStarted {
+                local_node_id: existing.local_node_id(),
+            });
+        }
         *guard = Some(Arc::clone(&service));
         Ok(service)
     }

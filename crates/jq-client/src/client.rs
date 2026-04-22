@@ -10,6 +10,8 @@
 //! module-private. Use [`JacquardBleClient::new`] as the entry point.
 
 use std::collections::BTreeMap;
+use std::io;
+use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -45,6 +47,7 @@ use crate::{
 };
 
 const DEFAULT_CLIENT_COMMAND_CAPACITY: usize = 64;
+const CLIENT_COMMAND_DRAIN_MAX: usize = DEFAULT_CLIENT_COMMAND_CAPACITY;
 const DEFAULT_CLIENT_TICK_DURATION_MS: Duration = Duration::from_millis(25);
 const CLIENT_PAYLOAD_MAGIC: &[u8; 8] = b"JQCLIENT";
 
@@ -60,6 +63,8 @@ pub enum BleClientError {
     Bridge(#[from] BleBridgeError),
     #[error(transparent)]
     Transport(#[from] TransportError),
+    #[error("failed to start jacquard ble client runtime")]
+    RuntimeStart(#[from] io::Error),
     #[error("jacquard ble client runtime is no longer running")]
     RuntimeStopped,
 }
@@ -97,6 +102,7 @@ struct ClientTask<Transport, Sender> {
     route_cache: BTreeMap<NodeId, jacquard_core::RouteId>,
     tick_duration_ms: Duration,
     shutdown: watch::Receiver<bool>,
+    startup: Option<std_mpsc::Sender<Result<(), BleClientError>>>,
 }
 
 impl<Transport, Sender> ClientTask<Transport, Sender>
@@ -105,6 +111,10 @@ where
     Sender: TransportSenderEffects + Send + 'static,
 {
     async fn run(mut self) {
+        if let Some(startup) = self.startup.take() {
+            // allow-ignored-result: startup receiver may have gone away if construction was abandoned
+            let _ = startup.send(Ok(()));
+        }
         loop {
             if *self.shutdown.borrow() {
                 break;
@@ -130,13 +140,14 @@ where
     }
 
     async fn drain_ready_commands(&mut self) -> bool {
-        loop {
+        for _ in 0..CLIENT_COMMAND_DRAIN_MAX {
             match self.commands.try_recv() {
                 Ok(command) => self.handle_command(command).await,
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return true,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
             }
         }
+        true
     }
 
     async fn handle_command(&mut self, command: ClientCommand) {
@@ -308,7 +319,8 @@ where
         match self.bridge.wait_decision(&wait_state) {
             crate::BleBridgeWaitDecision::AdvanceImmediately => true,
             crate::BleBridgeWaitDecision::WaitUntilTick(ticks) => {
-                self.wait_for_tick_or_work(ticks).await
+                self.wait_for_tick_or_work(ticks, wait_state.notifier_snapshot)
+                    .await
             }
             crate::BleBridgeWaitDecision::BlockOnNotifier { snapshot } => {
                 self.wait_for_notifier_or_work(snapshot).await
@@ -316,16 +328,18 @@ where
         }
     }
 
-    async fn wait_for_tick_or_work(&mut self, ticks: Tick) -> bool {
+    async fn wait_for_tick_or_work(&mut self, ticks: Tick, notifier_snapshot: u64) -> bool {
         let sleep = tokio::time::sleep(duration_for_tick_hint(self.tick_duration_ms, ticks));
         let notifier = self.bridge.notifier().clone();
-        let snapshot = notifier.snapshot();
+        if notifier.has_changed_since(notifier_snapshot) {
+            return true;
+        }
         tokio::pin!(sleep);
         tokio::select! {
             biased;
             changed = self.shutdown.changed() => changed.is_err() || !*self.shutdown.borrow(),
             command = self.commands.recv() => self.handle_wait_command(command).await,
-            _ = notifier.changed(snapshot) => true,
+            _ = notifier.changed(notifier_snapshot) => true,
             _ = &mut sleep => true,
         }
     }
@@ -384,13 +398,13 @@ impl JacquardBleClient {
         let (driver, sender, outbound, control, notifier, runtime_task) = components.into_parts();
         let transport =
             BleBridgeTransport::from_parts(driver, outbound, control, notifier, runtime_task);
-        Ok(Self::spawn_with_transport(
+        Self::spawn_with_transport(
             local_node_id,
             initial_topology(local_node_id, Tick(1)),
             transport,
             sender,
             DEFAULT_CLIENT_TICK_DURATION_MS,
-        ))
+        )
     }
 
     #[doc(hidden)]
@@ -412,6 +426,7 @@ impl JacquardBleClient {
             transport_sender,
             DEFAULT_CLIENT_TICK_DURATION_MS,
         )
+        .expect("spawn test jq-client")
     }
 
     #[doc(hidden)]
@@ -434,6 +449,7 @@ impl JacquardBleClient {
             transport_sender,
             tick_duration_ms,
         )
+        .expect("spawn test jq-client")
     }
 
     pub async fn send(&self, to: NodeId, payload: &[u8]) -> Result<(), BleClientError> {
@@ -483,7 +499,7 @@ impl JacquardBleClient {
         transport: Transport,
         transport_sender: Sender,
         tick_duration_ms: Duration,
-    ) -> Self
+    ) -> Result<Self, BleClientError>
     where
         Transport: BleBridgeIo + Send + 'static,
         Sender: TransportSenderEffects + Clone + Send + 'static,
@@ -497,51 +513,71 @@ impl JacquardBleClient {
         let (topology_updates, _) = broadcast::channel(DEFAULT_CLIENT_COMMAND_CAPACITY);
         let topology_updates_task = topology_updates.clone();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (startup_tx, startup_rx) = std_mpsc::channel();
         // Dedicated OS thread with a single-threaded tokio runtime isolates the client event loop
         // from the caller's runtime and avoids Send requirements on the LocalSet-pinned futures.
-        let runtime_thread = std::thread::spawn(move || {
-            let effects = BleRuntimeEffects::new(topology.observed_at_tick);
-            let router = build_router(local_node_id, topology.clone(), effects.clone())
-                .expect("build router");
-            let mut projector = TopologyProjector::new(local_node_id, topology);
-            // Seed the projector with capabilities advertised by each engine so route shapes are
-            // classified correctly from the first round.
-            for engine_id in router.registered_engine_ids() {
-                if let Some(capabilities) = router.registered_engine_capabilities(&engine_id) {
-                    // false means no snapshot change; the projector is still seeded correctly.
-                    // allow-ignored-result: capability seeding is best-effort because the projector already owns the initial topology
-                    let _ = projector.ingest_engine_capabilities(capabilities);
+        let runtime_thread = std::thread::Builder::new()
+            .name("jq-client-runtime".into())
+            .spawn(move || {
+                let effects = BleRuntimeEffects::new(topology.observed_at_tick);
+                let router = match build_router(local_node_id, topology.clone(), effects.clone()) {
+                    Ok(router) => router,
+                    Err(error) => {
+                        // allow-ignored-result: startup receiver may have gone away if construction was abandoned
+                        let _ = startup_tx.send(Err(BleClientError::Route(error)));
+                        return;
+                    }
+                };
+                let mut projector = TopologyProjector::new(local_node_id, topology);
+                // Seed the projector with capabilities advertised by each engine so route shapes are
+                // classified correctly from the first round.
+                for engine_id in router.registered_engine_ids() {
+                    if let Some(capabilities) = router.registered_engine_capabilities(&engine_id) {
+                        // false means no snapshot change; the projector is still seeded correctly.
+                        // allow-ignored-result: capability seeding is best-effort because the projector already owns the initial topology
+                        let _ = projector.ingest_engine_capabilities(capabilities);
+                    }
                 }
-            }
-            let bridge = BleHostBridge::with_clock(
-                local_node_id,
-                router,
-                transport,
-                effects,
-                BleBridgeConfig::default(),
-            );
-            let task = ClientTask {
-                local_node_id,
-                bridge,
-                transport_sender,
-                commands: commands_rx,
-                incoming: incoming_task,
-                topology: topology_task_state,
-                topology_updates: topology_updates_task,
-                projector,
-                route_cache: BTreeMap::new(),
-                tick_duration_ms,
-                shutdown: shutdown_rx,
-            };
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build jq-client runtime");
-            let local = tokio::task::LocalSet::new();
-            local.block_on(&runtime, task.run());
-        });
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        // allow-ignored-result: startup receiver may have gone away if construction was abandoned
+                        let _ = startup_tx.send(Err(BleClientError::RuntimeStart(error)));
+                        return;
+                    }
+                };
+                let bridge = BleHostBridge::with_clock(
+                    local_node_id,
+                    router,
+                    transport,
+                    effects,
+                    BleBridgeConfig::default(),
+                );
+                let task = ClientTask {
+                    local_node_id,
+                    bridge,
+                    transport_sender,
+                    commands: commands_rx,
+                    incoming: incoming_task,
+                    topology: topology_task_state,
+                    topology_updates: topology_updates_task,
+                    projector,
+                    route_cache: BTreeMap::new(),
+                    tick_duration_ms,
+                    shutdown: shutdown_rx,
+                    startup: Some(startup_tx),
+                };
+                let local = tokio::task::LocalSet::new();
+                local.block_on(&runtime, task.run());
+            })?;
+        startup_rx
+            .recv()
+            .map_err(|_| BleClientError::RuntimeStopped)??;
 
-        Self {
+        Ok(Self {
             local_node_id,
             commands: commands_tx,
             incoming: incoming_tx,
@@ -549,7 +585,7 @@ impl JacquardBleClient {
             topology_updates,
             shutdown: shutdown_tx,
             runtime_thread: Some(runtime_thread),
-        }
+        })
     }
 }
 

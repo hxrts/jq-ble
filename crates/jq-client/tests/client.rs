@@ -163,7 +163,7 @@ async fn notifier_wakes_the_client_without_waiting_for_the_full_tick_interval() 
             };
             let transport = FakeTransport::new(outbound_rx);
             let ingress_sender = transport.ingress_sender.clone();
-            let bridge_round_interval_ms = Duration::from_millis(250);
+            let bridge_round_interval_ms = Duration::from_millis(1_000);
             let client = JacquardBleClient::new_with_transport_and_round_interval_ms_for_testing(
                 local_node_id,
                 local_only_topology(local_node_id),
@@ -183,14 +183,14 @@ async fn notifier_wakes_the_client_without_waiting_for_the_full_tick_interval() 
                 )
                 .expect("emit link observation");
 
-            let updated = tokio::time::timeout(Duration::from_millis(125), topology_stream.next())
+            let updated = tokio::time::timeout(Duration::from_millis(500), topology_stream.next())
                 .await
                 .expect("notifier should wake before the fallback tick interval")
                 .expect("topology update");
             assert!(updated.nodes.contains_key(&remote_node_id));
             assert!(
-                started_at.elapsed() < Duration::from_millis(200),
-                "topology update should be driven by the notifier rather than a 250ms poll",
+                started_at.elapsed() < Duration::from_millis(750),
+                "topology update should be driven by the notifier rather than a 1s poll",
             );
         })
         .await;
