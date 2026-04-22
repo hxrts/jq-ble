@@ -6,27 +6,6 @@
 
 Unicast sends use point-to-point BLE paths: L2CAP when available, otherwise central GATT writes. Peripheral GATT notifications are exposed only through explicit multicast fanout intent. `blew` targets notifications by subscriber on Apple and Android; Linux/BlueZ falls back to characteristic-wide broadcast, so jq-ble only uses notify fanout for an admitted multicast receiver set. BLE advertising remains discovery/control-plane only.
 
-## BLE Configuration
-
-`JacquardBleClient::new(local_node_id)` uses conservative defaults. Call
-`JacquardBleClient::new_with_config(local_node_id, BleConfig { .. })` or
-`JacquardBleService::new_with_ble_config(...)` when a host needs platform
-policy:
-
-- `BleConfig::queue` controls ingress and outbound command mailbox capacity.
-- `BleConfig::restoration` carries Apple/CoreBluetooth restore identifiers for
-  central and peripheral roles.
-- `BleConfig::startup` carries optional readiness timeout policy before
-  scanning or publishing services.
-- `BleConfig::scan` carries scan service UUID filters and low-latency/low-power
-  scan mode.
-
-When restore identifiers are configured, jq-ble constructs `blew` with
-`with_config`, drains restored state before issuing new BLE work, and republishes
-L2CAP listeners because L2CAP channels are not restored. iOS background scanning
-requires a non-empty service UUID filter; an empty filter remains the foreground
-default.
-
 ## Crates
 
 - `crates/jq-link-profile` - BLE link profile and runtime owner task for `jacquard`
@@ -42,30 +21,7 @@ nix develop
 
 # Build the workspace
 cargo build --workspace
-
-# Run all tests
-cargo test --workspace
-
-# Run the full local CI dry run
-just ci-dry-run
 ```
-
-## Release
-
-The Nix dev shell exports the Cargo registry token from
-`~/.local/state/secrets/cargo-registry-token` when that file exists.
-
-```sh
-# Validate the release path without publishing or tagging
-just release 0.1.0 true true false false true true
-
-# Publish crates, tag v0.1.0, push branch and tag, then let GitHub create the release
-just release 0.1.0 false false false true false false
-```
-
-Published crates are listed in `scripts/release-packages.sh`. Pushing the
-`v*` tag triggers `.github/workflows/release.yml`, which creates the GitHub
-release with generated release notes.
 
 ## License
 
