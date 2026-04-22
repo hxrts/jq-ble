@@ -24,7 +24,7 @@ use tokio_stream::StreamExt;
 
 use blew::util::event_stream::EventStream;
 
-use crate::cast::raw_ble_link_observed_event;
+use crate::cast::{raw_ble_link_faulted_event, raw_ble_link_observed_event};
 use crate::gatt::{
     JACQUARD_C2P_CHAR_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
     JACQUARD_PSM_CHAR_UUID, gatt_endpoint, gatt_fallback_service, gatt_l2cap_service,
@@ -35,8 +35,8 @@ use crate::l2cap::{
     spawn_l2cap_channel_tasks, write_l2cap_identity,
 };
 use crate::session::{
-    device_id_from_endpoint, endpoint_for_session, first_gatt_fallback, resolve_remote_node_id,
-    resolve_remote_psm, session_device_id, session_references_device,
+    device_id_from_endpoint, endpoint_for_session, resolve_remote_node_id, resolve_remote_psm,
+    session_references_device,
 };
 use crate::transport::{
     BleChannelId, BleConfig, BleDriverCommand, BleDriverControl, BleLinkError, BleOutboundCommand,
@@ -270,6 +270,7 @@ where
                 let key = BlePeerKey::from(&device_id);
                 let removed = self.peers.remove(&key);
                 if let Some(jacquard_host_support::PeerIdentityState::Resolved(node_id)) = removed {
+                    self.emit_faulted_links_for_device(node_id, &device_id);
                     self.drop_l2cap_channels_for_node(node_id);
                 }
                 self.sessions
@@ -437,20 +438,8 @@ where
             };
             self.sessions
                 .entry(node_id)
-                .and_modify(|sessions| {
-                    // Don't demote an active L2CAP egress session; store GATT as the fallback instead.
-                    if !matches!(sessions.preferred_egress, Some(BleSession::L2cap { .. })) {
-                        sessions.preferred_ingress = Some(session.clone());
-                        sessions.preferred_egress = Some(session.clone());
-                    } else {
-                        sessions.fallback_egress = Some(session.clone());
-                    }
-                })
-                .or_insert_with(|| PeerSessions {
-                    preferred_ingress: Some(session.clone()),
-                    preferred_egress: Some(session),
-                    fallback_egress: None,
-                });
+                .and_modify(|sessions| sessions.install_gatt_subscription(session.clone()))
+                .or_insert_with(|| PeerSessions::gatt_only(session));
         }
     }
 
@@ -615,14 +604,9 @@ where
     }
 
     fn egress_session_for_device(&self, device_id: &DeviceId) -> Option<BleSession> {
-        self.sessions.values().find_map(|sessions| {
-            sessions
-                .preferred_egress
-                .as_ref()
-                .or(sessions.fallback_egress.as_ref())
-                .filter(|session| session_device_id(session) == device_id)
-                .cloned()
-        })
+        self.sessions
+            .values()
+            .find_map(|sessions| sessions.egress_for_device(device_id))
     }
 
     async fn install_gatt_session(&mut self, node_id: NodeId, device_id: DeviceId) {
@@ -639,21 +623,8 @@ where
         };
         self.sessions
             .entry(node_id)
-            .and_modify(|sessions| {
-                // Preserve an existing L2CAP egress session; only update the GATT fallback slot.
-                if !matches!(sessions.preferred_egress, Some(BleSession::L2cap { .. })) {
-                    sessions.preferred_ingress = Some(session.clone());
-                    sessions.preferred_egress = Some(session.clone());
-                }
-                if sessions.fallback_egress.is_none() {
-                    sessions.fallback_egress = Some(session.clone());
-                }
-            })
-            .or_insert_with(|| PeerSessions {
-                preferred_ingress: Some(session.clone()),
-                preferred_egress: Some(session.clone()),
-                fallback_egress: Some(session),
-            });
+            .and_modify(|sessions| sessions.install_gatt_central(session.clone()))
+            .or_insert_with(|| PeerSessions::gatt_with_fallback(session));
     }
 
     async fn install_l2cap_session(
@@ -669,19 +640,8 @@ where
         };
         self.sessions
             .entry(node_id)
-            .and_modify(|sessions| {
-                // Capture the existing GATT session as fallback before promoting L2CAP to preferred.
-                if sessions.fallback_egress.is_none() {
-                    sessions.fallback_egress = first_gatt_fallback(sessions);
-                }
-                sessions.preferred_ingress = Some(l2cap_session.clone());
-                sessions.preferred_egress = Some(l2cap_session.clone());
-            })
-            .or_insert_with(|| PeerSessions {
-                preferred_ingress: Some(l2cap_session.clone()),
-                preferred_egress: Some(l2cap_session.clone()),
-                fallback_egress: None,
-            });
+            .and_modify(|sessions| sessions.promote_l2cap(l2cap_session.clone()))
+            .or_insert_with(|| PeerSessions::l2cap_preferred(l2cap_session, None));
         // Emit a link observation so the router updates its endpoint record to L2CAP.
         self.emit_link_observed(node_id, l2cap_endpoint(&device_id));
     }
@@ -715,29 +675,8 @@ where
             return;
         };
 
-        // Demote preferred sessions back to the GATT fallback when they referenced this channel.
-        let fallback = sessions.fallback_egress.clone();
-        if matches!(
-            sessions.preferred_ingress,
-            Some(BleSession::L2cap {
-                channel_id: current,
-                ..
-            }) if current == channel_id
-        ) {
-            sessions.preferred_ingress = fallback.clone();
-        }
-        if matches!(
-            sessions.preferred_egress,
-            Some(BleSession::L2cap {
-                channel_id: current,
-                ..
-            }) if current == channel_id
-        ) {
-            sessions.preferred_egress = fallback.clone();
-        }
-
         // Notify the router that the effective endpoint has changed so it updates its link record.
-        if let Some(fallback) = sessions.preferred_egress.clone() {
+        if let Some(fallback) = sessions.downgrade_l2cap(channel_id) {
             self.emit_link_observed(channel.node_id, endpoint_for_session(&fallback));
         }
     }
@@ -745,6 +684,15 @@ where
     fn drop_l2cap_channels_for_node(&mut self, node_id: NodeId) {
         self.l2cap_channels
             .retain(|_, channel| channel.node_id != node_id);
+    }
+
+    fn emit_faulted_links_for_device(&mut self, node_id: NodeId, device_id: &DeviceId) {
+        let Some(sessions) = self.sessions.get(&node_id) else {
+            return;
+        };
+        for endpoint in sessions.endpoints_for_device(device_id) {
+            self.emit_control_event(raw_ble_link_faulted_event(node_id, endpoint));
+        }
     }
 
     fn next_channel_id(&mut self) -> BleChannelId {

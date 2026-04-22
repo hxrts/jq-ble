@@ -1,4 +1,8 @@
 //! BLE delivery-support shaping through `jacquard-cast-support`.
+//!
+//! Translates raw BLE link events into `TransportObservation`s that Mercator
+//! consumes through the router, keeping GATT/L2CAP confidence weighting in
+//! sync with topology input.
 
 use jacquard_cast_support::{
     CastDeliveryObjective, CastDeliveryPolicy, CastEvidenceMeta, UnicastDeliverySupport,
@@ -14,6 +18,7 @@ use jacquard_mem_link_profile::SimulatedLinkProfile;
 
 const BLE_LINK_RTT_ESTIMATE_MS: DurationMs = DurationMs(150);
 const BLE_LINK_VALID_FOR_MS: DurationMs = DurationMs(30_000);
+// L2CAP is rated higher than GATT because CoC provides flow control and larger frames, which Mercator weighs into selection.
 const BLE_GATT_CONFIDENCE: RatioPermille = RatioPermille(700);
 const BLE_L2CAP_CONFIDENCE: RatioPermille = RatioPermille(900);
 
@@ -60,6 +65,19 @@ pub fn link_observation_from_ble_event(
         return event.observe_at(observed_at_tick);
     };
 
+    if link.state.state != LinkRuntimeState::Active {
+        return TransportObservation::LinkObserved {
+            remote_node_id,
+            observation: Observation {
+                value: link,
+                source_class,
+                evidence_class,
+                origin_authentication,
+                observed_at_tick,
+            },
+        };
+    }
+
     let meta = cast_evidence_meta(observed_at_tick, order);
     let endpoint = link.endpoint;
     let support = shape_ble_unicast_delivery_support(
@@ -91,9 +109,26 @@ pub(crate) fn raw_ble_link_observed_event(
     remote_node_id: NodeId,
     endpoint: LinkEndpoint,
 ) -> TransportIngressEvent {
+    raw_ble_link_event(remote_node_id, endpoint, LinkRuntimeState::Active)
+}
+
+#[must_use]
+pub(crate) fn raw_ble_link_faulted_event(
+    remote_node_id: NodeId,
+    endpoint: LinkEndpoint,
+) -> TransportIngressEvent {
+    raw_ble_link_event(remote_node_id, endpoint, LinkRuntimeState::Faulted)
+}
+
+#[must_use]
+fn raw_ble_link_event(
+    remote_node_id: NodeId,
+    endpoint: LinkEndpoint,
+    runtime_state: LinkRuntimeState,
+) -> TransportIngressEvent {
     TransportIngressEvent::LinkObserved {
         remote_node_id,
-        link: link_carrier(endpoint),
+        link: link_carrier(endpoint, runtime_state),
         source_class: FactSourceClass::Local,
         evidence_class: RoutingEvidenceClass::DirectObservation,
         origin_authentication: OriginAuthenticationClass::Unauthenticated,
@@ -152,14 +187,14 @@ fn link_from_unicast_delivery_support(
 }
 
 #[must_use]
-fn link_carrier(endpoint: LinkEndpoint) -> Link {
+fn link_carrier(endpoint: LinkEndpoint, runtime_state: LinkRuntimeState) -> Link {
     LinkBuilder::new(endpoint)
         .with_profile(
             BLE_LINK_RTT_ESTIMATE_MS,
             RepairCapability::TransportRetransmit,
             PartitionRecoveryClass::LocalReconnect,
         )
-        .with_runtime_state(LinkRuntimeState::Active)
+        .with_runtime_state(runtime_state)
         .build()
 }
 

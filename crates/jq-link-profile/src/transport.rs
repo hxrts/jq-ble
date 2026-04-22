@@ -95,12 +95,188 @@ pub enum BleSession {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PeerSessions {
-    // The session used to receive payloads from this peer (GATT or L2CAP).
-    pub preferred_ingress: Option<BleSession>,
-    // The session used to send payloads to this peer; upgraded to L2CAP when available.
-    pub preferred_egress: Option<BleSession>,
-    // GATT session retained so egress can downgrade if the L2CAP channel closes unexpectedly.
-    pub fallback_egress: Option<BleSession>,
+    state: PeerSessionState,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum PeerSessionState {
+    #[default]
+    Disconnected,
+    GattOnly {
+        ingress: BleSession,
+        egress: BleSession,
+    },
+    L2capPreferred {
+        session: BleSession,
+        fallback: Option<BleSession>,
+    },
+}
+
+impl PeerSessions {
+    #[must_use]
+    pub fn disconnected() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn gatt_only(session: BleSession) -> Self {
+        Self {
+            state: PeerSessionState::GattOnly {
+                ingress: session.clone(),
+                egress: session,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn gatt_with_fallback(session: BleSession) -> Self {
+        Self::gatt_only(session)
+    }
+
+    #[must_use]
+    pub fn l2cap_preferred(session: BleSession, fallback: Option<BleSession>) -> Self {
+        Self {
+            state: PeerSessionState::L2capPreferred { session, fallback },
+        }
+    }
+
+    pub(crate) fn install_gatt_subscription(&mut self, session: BleSession) {
+        match &mut self.state {
+            PeerSessionState::Disconnected | PeerSessionState::GattOnly { .. } => {
+                self.state = PeerSessionState::GattOnly {
+                    ingress: session.clone(),
+                    egress: session,
+                };
+            }
+            PeerSessionState::L2capPreferred { fallback, .. } => {
+                *fallback = Some(session);
+            }
+        }
+    }
+
+    pub(crate) fn install_gatt_central(&mut self, session: BleSession) {
+        match &mut self.state {
+            PeerSessionState::Disconnected | PeerSessionState::GattOnly { .. } => {
+                self.state = PeerSessionState::GattOnly {
+                    ingress: session.clone(),
+                    egress: session,
+                };
+            }
+            PeerSessionState::L2capPreferred { fallback, .. } => {
+                if fallback.is_none() {
+                    *fallback = Some(session);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn promote_l2cap(&mut self, session: BleSession) {
+        let fallback = self.first_gatt_fallback();
+        self.state = PeerSessionState::L2capPreferred { session, fallback };
+    }
+
+    pub(crate) fn downgrade_l2cap(&mut self, channel_id: BleChannelId) -> Option<BleSession> {
+        let fallback = match &self.state {
+            PeerSessionState::L2capPreferred {
+                session:
+                    BleSession::L2cap {
+                        channel_id: current,
+                        ..
+                    },
+                fallback,
+            } if *current == channel_id => fallback.clone(),
+            _ => return self.preferred_egress(),
+        };
+        if let Some(fallback) = fallback {
+            self.state = PeerSessionState::GattOnly {
+                ingress: fallback.clone(),
+                egress: fallback.clone(),
+            };
+            return Some(fallback);
+        }
+        self.state = PeerSessionState::Disconnected;
+        None
+    }
+
+    #[must_use]
+    pub(crate) fn egress_for_device(&self, device_id: &DeviceId) -> Option<BleSession> {
+        self.preferred_egress()
+            .filter(|session| session.device_id() == device_id)
+    }
+
+    #[must_use]
+    pub(crate) fn endpoints_for_device(&self, device_id: &DeviceId) -> Vec<LinkEndpoint> {
+        let mut endpoints = Vec::new();
+        for session in self.iter_sessions() {
+            if session.device_id() != device_id {
+                continue;
+            }
+            let endpoint = session.endpoint();
+            if !endpoints.contains(&endpoint) {
+                endpoints.push(endpoint);
+            }
+        }
+        endpoints
+    }
+
+    #[must_use]
+    pub(crate) fn references_device(&self, device_id: &DeviceId) -> bool {
+        self.iter_sessions()
+            .any(|session| session.device_id() == device_id)
+    }
+
+    fn preferred_egress(&self) -> Option<BleSession> {
+        match &self.state {
+            PeerSessionState::Disconnected => None,
+            PeerSessionState::GattOnly { egress, .. } => Some(egress.clone()),
+            PeerSessionState::L2capPreferred { session, .. } => Some(session.clone()),
+        }
+    }
+
+    fn iter_sessions(&self) -> impl Iterator<Item = &BleSession> {
+        let mut sessions = Vec::new();
+        match &self.state {
+            PeerSessionState::Disconnected => {}
+            PeerSessionState::GattOnly { ingress, egress } => {
+                sessions.push(ingress);
+                sessions.push(egress);
+            }
+            PeerSessionState::L2capPreferred { session, fallback } => {
+                sessions.push(session);
+                if let Some(fallback) = fallback {
+                    sessions.push(fallback);
+                }
+            }
+        }
+        sessions.into_iter()
+    }
+
+    fn first_gatt_fallback(&self) -> Option<BleSession> {
+        self.iter_sessions()
+            .find(|session| !matches!(session, BleSession::L2cap { .. }))
+            .cloned()
+    }
+}
+
+impl BleSession {
+    #[must_use]
+    pub fn device_id(&self) -> &DeviceId {
+        match self {
+            Self::GattCentral { device_id }
+            | Self::GattPeripheralSubscribed { device_id }
+            | Self::L2cap { device_id, .. } => device_id,
+        }
+    }
+
+    #[must_use]
+    pub fn endpoint(&self) -> LinkEndpoint {
+        match self {
+            Self::GattCentral { device_id } | Self::GattPeripheralSubscribed { device_id } => {
+                crate::gatt::gatt_endpoint(device_id)
+            }
+            Self::L2cap { device_id, .. } => crate::gatt::l2cap_endpoint(device_id),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

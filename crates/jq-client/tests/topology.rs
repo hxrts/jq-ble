@@ -434,7 +434,32 @@ async fn topology_api_tracks_discovery_upgrade_and_disconnect_like_events() {
     assert_eq!(downgraded_edge.transport_kind(), &TransportKind::BleGatt);
     assert_eq!(
         downgraded_edge.observation.value.state.state,
-        LinkRuntimeState::Active
+        LinkRuntimeState::Degraded
+    );
+
+    ingress_sender
+        .emit(
+            TransportIngressClass::Control,
+            link_observed(
+                remote_node_id,
+                ble_endpoint(9, TransportKind::BleGatt),
+                LinkRuntimeState::Faulted,
+            ),
+        )
+        .expect("emit faulted link");
+    let faulted_snapshot = tokio::time::timeout(Duration::from_millis(400), stream.next())
+        .await
+        .expect("faulted topology update")
+        .expect("faulted snapshot");
+    assert_eq!(
+        faulted_snapshot
+            .edge(local_node_id, remote_node_id)
+            .expect("faulted edge")
+            .observation
+            .value
+            .state
+            .state,
+        LinkRuntimeState::Faulted
     );
 }
 

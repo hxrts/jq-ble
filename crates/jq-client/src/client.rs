@@ -18,20 +18,10 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use jacquard_core::{
-    ByteCount, Configuration, ConnectivityPosture, ControllerId, DestinationId, DurationMs,
-    Environment, FactSourceClass, HealthScore, HoldFallbackPolicy, IdentityAssuranceClass, Limit,
-    MaterializedRoute, NodeId, Observation, OriginAuthenticationClass, PriorityPoints,
-    RatioPermille, RouteEpoch, RouteError, RoutePartitionClass, RouteProtectionClass,
-    RouteRepairClass, RouteSelectionError, RouteServiceKind, RoutingEvidenceClass,
-    RoutingObjective, RoutingPolicyInputs, RoutingTickHint, SelectedRoutingParameters, Tick,
-    TransportError, TransportKind, TransportObservation,
+    Configuration, LinkEndpoint, MaterializedRoute, NodeId, Observation, RouteError, RouteId,
+    RouteSelectionError, RoutingTickHint, Tick, TransportError, TransportObservation,
 };
-use jacquard_host_support::opaque_endpoint;
-use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
-use jacquard_mercator::{
-    MERCATOR_ENGINE_ID, MercatorEngine, selected_neighbor_from_backend_route_id,
-};
-use jacquard_router::{FixedPolicyEngine, MultiEngineRouter};
+use jacquard_mercator::selected_neighbor_from_backend_route_id;
 use jacquard_traits::{Router, RoutingDataPlane, TransportSenderEffects};
 use jq_link_profile::{BleConfig, BleLinkError, BleTransportComponents};
 use jq_node_profile::MeshTopology;
@@ -40,7 +30,11 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio_stream::Stream;
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::framing::{decode_client_payload, encode_client_payload};
 use crate::projector::TopologyProjector;
+use crate::routing::{
+    JacquardBleRouter, build_router, default_objective, initial_topology, policy_inputs_for,
+};
 use crate::{
     BleBridgeConfig, BleBridgeError, BleBridgeIo, BleBridgeProgress, BleBridgeRoundReport,
     BleBridgeTransport, BleHostBridge, BleRuntimeEffects,
@@ -48,10 +42,22 @@ use crate::{
 
 const DEFAULT_CLIENT_COMMAND_CAPACITY: usize = 64;
 const CLIENT_COMMAND_DRAIN_MAX: usize = DEFAULT_CLIENT_COMMAND_CAPACITY;
+// Wall-clock duration of one logical Jacquard tick; translates router "within N ticks" hints into a real sleep.
 const DEFAULT_CLIENT_TICK_DURATION_MS: Duration = Duration::from_millis(25);
-const CLIENT_PAYLOAD_MAGIC: &[u8; 8] = b"JQCLIENT";
 
-pub type JacquardBleRouter = MultiEngineRouter<FixedPolicyEngine, BleRuntimeEffects>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JacquardBleSendStage {
+    QueuedForTransport,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JacquardBleSendReceipt {
+    pub destination_node_id: NodeId,
+    pub route_id: RouteId,
+    pub next_hop_node_id: NodeId,
+    pub endpoint: LinkEndpoint,
+    pub stage: JacquardBleSendStage,
+}
 
 #[derive(Debug, Error)]
 pub enum BleClientError {
@@ -67,31 +73,26 @@ pub enum BleClientError {
     RuntimeStart(#[from] io::Error),
     #[error("jacquard ble client runtime is no longer running")]
     RuntimeStopped,
+    #[error("jacquard ble client runtime panicked")]
+    RuntimePanicked,
 }
 
 enum ClientCommand {
     Send {
         to: NodeId,
         payload: Vec<u8>,
-        reply: oneshot::Sender<Result<(), BleClientError>>,
+        reply: oneshot::Sender<Result<JacquardBleSendReceipt, BleClientError>>,
     },
 }
 
-fn encode_client_payload(payload: &[u8]) -> Vec<u8> {
-    let mut framed = Vec::with_capacity(CLIENT_PAYLOAD_MAGIC.len() + payload.len());
-    framed.extend_from_slice(CLIENT_PAYLOAD_MAGIC);
-    framed.extend_from_slice(payload);
-    framed
-}
-
-fn decode_client_payload(payload: &[u8]) -> Option<&[u8]> {
-    payload
-        .starts_with(CLIENT_PAYLOAD_MAGIC)
-        .then_some(&payload[CLIENT_PAYLOAD_MAGIC.len()..])
+struct QueuedTransportCommand {
+    next_hop_node_id: NodeId,
+    endpoint: LinkEndpoint,
 }
 
 struct ClientTask<Transport, Sender> {
     local_node_id: NodeId,
+    // BleRuntimeEffects is the router's effect handler AND the bridge's clock so tick/order stamps stay consistent.
     bridge: BleHostBridge<JacquardBleRouter, Transport, BleRuntimeEffects>,
     transport_sender: Sender,
     commands: mpsc::Receiver<ClientCommand>,
@@ -161,7 +162,11 @@ where
         }
     }
 
-    async fn handle_send(&mut self, to: NodeId, payload: Vec<u8>) -> Result<(), BleClientError> {
+    async fn handle_send(
+        &mut self,
+        to: NodeId,
+        payload: Vec<u8>,
+    ) -> Result<JacquardBleSendReceipt, BleClientError> {
         if let Some(result) = self.try_cached_forward(to, &payload).await {
             return result;
         }
@@ -175,7 +180,7 @@ where
         &mut self,
         to: NodeId,
         payload: &[u8],
-    ) -> Option<Result<(), BleClientError>> {
+    ) -> Option<Result<JacquardBleSendReceipt, BleClientError>> {
         let route_id = self.route_cache.get(&to).copied()?;
         let route = self.bridge.router_mut().active_route(&route_id).cloned()?;
         if self
@@ -184,10 +189,15 @@ where
             .forward_payload(&route_id, payload)
             .is_ok()
         {
-            if let Err(error) = self.queue_payload_on_route(&route, payload) {
-                return Some(Err(error));
-            }
-            return Some(self.drive_bridge_round().await.map(|_| ()));
+            let queued = match self.queue_payload_on_route(&route, payload) {
+                Ok(queued) => queued,
+                Err(error) => return Some(Err(error)),
+            };
+            return Some(
+                self.drive_bridge_round()
+                    .await
+                    .map(|_| send_receipt(to, route_id, queued)),
+            );
         }
         // Route is stale; evict it and signal that the slow path is needed.
         self.route_cache.remove(&to);
@@ -198,7 +208,7 @@ where
         &mut self,
         to: NodeId,
         payload: &[u8],
-    ) -> Result<(), BleClientError> {
+    ) -> Result<JacquardBleSendReceipt, BleClientError> {
         // Slow path: materialize a new route then forward the payload in one step.
         let route = Router::activate_route(self.bridge.router_mut(), default_objective(to))?;
         let route_id = route.identity.stamp.route_id;
@@ -206,20 +216,20 @@ where
         self.bridge
             .router_mut()
             .forward_payload(&route_id, payload)?;
-        self.queue_payload_on_route(&route, payload)?;
+        let queued = self.queue_payload_on_route(&route, payload)?;
         self.route_cache.insert(to, route_id);
         self.drive_bridge_round().await?;
         if topology_changed {
             self.publish_topology();
         }
-        Ok(())
+        Ok(send_receipt(to, route_id, queued))
     }
 
     fn queue_payload_on_route(
         &mut self,
         route: &MaterializedRoute,
         payload: &[u8],
-    ) -> Result<(), BleClientError> {
+    ) -> Result<QueuedTransportCommand, BleClientError> {
         let next_hop_node_id = selected_neighbor_from_backend_route_id(
             &route.identity.admission.backend_ref.backend_route_id,
         )
@@ -232,7 +242,11 @@ where
             .ok_or_else(no_route_candidate)?;
         self.transport_sender
             .send_transport(&endpoint, payload)
-            .map_err(BleClientError::Transport)
+            .map_err(BleClientError::Transport)?;
+        Ok(QueuedTransportCommand {
+            next_hop_node_id,
+            endpoint,
+        })
     }
 
     async fn drive_bridge_round(&mut self) -> Result<BleBridgeProgress, BleClientError> {
@@ -452,7 +466,11 @@ impl JacquardBleClient {
         .expect("spawn test jq-client")
     }
 
-    pub async fn send(&self, to: NodeId, payload: &[u8]) -> Result<(), BleClientError> {
+    pub async fn send(
+        &self,
+        to: NodeId,
+        payload: &[u8],
+    ) -> Result<JacquardBleSendReceipt, BleClientError> {
         // recursion-exception: same-name forwarding keeps send on the top-level client handle
         let (reply_tx, reply_rx) = oneshot::channel();
         let payload = encode_client_payload(payload);
@@ -491,6 +509,11 @@ impl JacquardBleClient {
     #[must_use]
     pub fn local_node_id(&self) -> NodeId {
         self.local_node_id
+    }
+
+    pub fn shutdown(mut self) -> Result<(), BleClientError> {
+        self.request_runtime_shutdown();
+        self.join_runtime_thread()
     }
 
     fn spawn_with_transport<Transport, Sender>(
@@ -587,34 +610,34 @@ impl JacquardBleClient {
             runtime_thread: Some(runtime_thread),
         })
     }
+
+    fn request_runtime_shutdown(&mut self) {
+        // allow-ignored-result: shutdown notification is best-effort during teardown when the runtime already exited
+        let _ = self.shutdown.send(true);
+        let (replacement, _) = mpsc::channel(1);
+        let commands = std::mem::replace(&mut self.commands, replacement);
+        drop(commands);
+    }
+
+    fn join_runtime_thread(&mut self) -> Result<(), BleClientError> {
+        if let Some(runtime_thread) = self.runtime_thread.take() {
+            runtime_thread
+                .join()
+                .map_err(|_| BleClientError::RuntimePanicked)?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for JacquardBleClient {
     fn drop(&mut self) {
         // recursion-exception: drop uses same-name shutdown steps on owned channels and thread handles
         // drop-side-effects-exception: dropping the client is the explicit teardown point for the runtime thread
-        // allow-ignored-result: shutdown notification is best-effort during teardown when the runtime already exited
-        let _ = self.shutdown.send(true);
-        let (replacement, _) = mpsc::channel(1);
-        let commands = std::mem::replace(&mut self.commands, replacement);
-        drop(commands);
-        if let Some(runtime_thread) = self.runtime_thread.take() {
-            // allow-ignored-result: thread join result is ignored during teardown because the runtime may already be unwinding
-            let _ = runtime_thread.join();
-        }
+        self.request_runtime_shutdown();
+        // Dropping JoinHandle detaches the OS thread; explicit shutdown() is available for callers
+        // that need deterministic teardown and panic reporting.
+        let _detached_runtime = self.runtime_thread.take();
     }
-}
-
-#[doc(hidden)]
-#[must_use]
-pub fn encode_client_payload_for_testing(payload: &[u8]) -> Vec<u8> {
-    encode_client_payload(payload)
-}
-
-#[doc(hidden)]
-#[must_use]
-pub fn decode_client_payload_for_testing(payload: &[u8]) -> Option<Vec<u8>> {
-    decode_client_payload(payload).map(ToOwned::to_owned)
 }
 
 fn duration_for_tick_hint(round_interval_ms: Duration, ticks: Tick) -> Duration {
@@ -623,120 +646,20 @@ fn duration_for_tick_hint(round_interval_ms: Duration, ticks: Tick) -> Duration 
         .unwrap_or(Duration::MAX)
 }
 
-fn build_router(
-    local_node_id: NodeId,
-    topology: Observation<Configuration>,
-    effects: BleRuntimeEffects,
-) -> Result<JacquardBleRouter, RouteError> {
-    let mut router = MultiEngineRouter::new(
-        local_node_id,
-        FixedPolicyEngine::new(default_profile()),
-        effects.clone(),
-        topology.clone(),
-        policy_inputs_for(&topology, local_node_id),
-    );
-    router.register_engine(Box::new(MercatorEngine::new(local_node_id)))?;
-    Ok(router)
-}
-
-fn initial_topology(local_node_id: NodeId, observed_at_tick: Tick) -> Observation<Configuration> {
-    // Bootstrap a single-node topology so the router has a valid configuration before any peers are discovered.
-    let endpoint = opaque_endpoint(
-        TransportKind::BleGatt,
-        local_node_id.0.to_vec(),
-        ByteCount(512),
-    );
-    let local_node = NodePreset::route_capable_for_engines(
-        NodePresetOptions::new(
-            NodeIdentity::new(local_node_id, ControllerId(local_node_id.0)),
-            endpoint,
-            observed_at_tick,
-        ),
-        &[MERCATOR_ENGINE_ID],
-    )
-    .build();
-
-    Observation {
-        value: Configuration {
-            epoch: RouteEpoch(1),
-            nodes: BTreeMap::from([(local_node_id, local_node)]),
-            links: BTreeMap::new(),
-            environment: Environment {
-                reachable_neighbor_count: 0,
-                churn_permille: RatioPermille(0),
-                contention_permille: RatioPermille(0),
-            },
-        },
-        source_class: FactSourceClass::Local,
-        evidence_class: RoutingEvidenceClass::DirectObservation,
-        origin_authentication: OriginAuthenticationClass::Controlled,
-        observed_at_tick,
-    }
-}
-
-fn policy_inputs_for(
-    topology: &Observation<Configuration>,
-    local_node_id: NodeId,
-) -> RoutingPolicyInputs {
-    RoutingPolicyInputs {
-        local_node: Observation {
-            value: topology.value.nodes[&local_node_id].clone(),
-            source_class: topology.source_class,
-            evidence_class: topology.evidence_class,
-            origin_authentication: topology.origin_authentication,
-            observed_at_tick: topology.observed_at_tick,
-        },
-        local_environment: Observation {
-            value: topology.value.environment.clone(),
-            source_class: topology.source_class,
-            evidence_class: topology.evidence_class,
-            origin_authentication: topology.origin_authentication,
-            observed_at_tick: topology.observed_at_tick,
-        },
-        // Mercator single-engine routing.
-        routing_engine_count: 1,
-        // Conservative BLE estimates that bias the policy engine toward repair-tolerant routes.
-        median_rtt_ms: DurationMs(40),
-        loss_permille: RatioPermille(50),
-        partition_risk_permille: RatioPermille(150),
-        adversary_pressure_permille: RatioPermille(25),
-        identity_assurance: IdentityAssuranceClass::ControllerBound,
-        direct_reachability_score: HealthScore(900),
-    }
-}
-
-fn default_profile() -> SelectedRoutingParameters {
-    SelectedRoutingParameters {
-        selected_protection: RouteProtectionClass::LinkProtected,
-        selected_connectivity: ConnectivityPosture {
-            repair: RouteRepairClass::Repairable,
-            partition: RoutePartitionClass::ConnectedOnly,
-        },
-        deployment_profile: jacquard_core::OperatingMode::DenseInteractive,
-        diversity_floor: jacquard_core::DiversityFloor(1),
-        routing_engine_fallback_policy: jacquard_core::RoutingEngineFallbackPolicy::Forbidden,
-        route_replacement_policy: jacquard_core::RouteReplacementPolicy::Allowed,
-    }
-}
-
-fn default_objective(destination: NodeId) -> RoutingObjective {
-    RoutingObjective {
-        destination: DestinationId::Node(destination),
-        // Move semantics: payload is consumed by the destination, not fanned out.
-        service_kind: RouteServiceKind::Move,
-        target_protection: RouteProtectionClass::LinkProtected,
-        protection_floor: RouteProtectionClass::LinkProtected,
-        target_connectivity: ConnectivityPosture {
-            repair: RouteRepairClass::Repairable,
-            partition: RoutePartitionClass::ConnectedOnly,
-        },
-        hold_fallback_policy: HoldFallbackPolicy::Forbidden,
-        latency_budget_ms: Limit::Bounded(DurationMs(250)),
-        protection_priority: PriorityPoints(10),
-        connectivity_priority: PriorityPoints(20),
-    }
-}
-
 fn no_route_candidate() -> BleClientError {
     BleClientError::Route(RouteError::Selection(RouteSelectionError::NoCandidate))
+}
+
+fn send_receipt(
+    destination_node_id: NodeId,
+    route_id: RouteId,
+    queued: QueuedTransportCommand,
+) -> JacquardBleSendReceipt {
+    JacquardBleSendReceipt {
+        destination_node_id,
+        route_id,
+        next_hop_node_id: queued.next_hop_node_id,
+        endpoint: queued.endpoint,
+        stage: JacquardBleSendStage::QueuedForTransport,
+    }
 }

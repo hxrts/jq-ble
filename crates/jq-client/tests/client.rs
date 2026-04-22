@@ -12,9 +12,10 @@ use jacquard_core::{
     TransportIngressEvent, TransportKind,
 };
 use jacquard_host_support::{TransportIngressClass, dispatch_mailbox};
-use jq_client::{
-    JacquardBleClient, decode_client_payload_for_testing, encode_client_payload_for_testing,
+use jq_client::test_support::{
+    decode_client_payload_for_testing, encode_client_payload_for_testing,
 };
+use jq_client::{JacquardBleClient, JacquardBleSendStage};
 use tokio::task::LocalSet;
 use tokio_stream::StreamExt;
 
@@ -71,10 +72,13 @@ async fn send_flushes_a_payload_through_the_client_boundary() {
             );
             let started_at = Instant::now();
 
-            client
+            let receipt = client
                 .send(remote_node_id, b"hello over jacquard ble")
                 .await
                 .expect("send through client");
+            assert_eq!(receipt.destination_node_id, remote_node_id);
+            assert_eq!(receipt.next_hop_node_id, remote_node_id);
+            assert_eq!(receipt.stage, JacquardBleSendStage::QueuedForTransport);
             assert!(
                 started_at.elapsed() < Duration::from_millis(150),
                 "send should preempt the idle wait path",
@@ -192,6 +196,28 @@ async fn notifier_wakes_the_client_without_waiting_for_the_full_tick_interval() 
                 started_at.elapsed() < Duration::from_millis(750),
                 "topology update should be driven by the notifier rather than a 1s poll",
             );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn explicit_shutdown_joins_the_client_runtime() {
+    LocalSet::new()
+        .run_until(async {
+            let local_node_id = NodeId([1; 32]);
+            let (outbound_tx, outbound_rx) = dispatch_mailbox(64);
+            let transport_sender = TestTransportSender {
+                outbound: outbound_tx,
+            };
+            let transport = FakeTransport::new(outbound_rx);
+            let client = JacquardBleClient::new_with_transport_for_testing(
+                local_node_id,
+                local_only_topology(local_node_id),
+                transport,
+                transport_sender,
+            );
+
+            client.shutdown().expect("shutdown client runtime");
         })
         .await;
 }

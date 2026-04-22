@@ -12,8 +12,8 @@ use blew::types::DeviceId;
 use bytes::Bytes;
 use futures_util::SinkExt;
 use jacquard_core::{
-    ByteCount, EndpointLocator, LinkEndpoint, NodeId, TransportError, TransportIngressEvent,
-    TransportKind,
+    ByteCount, EndpointLocator, LinkEndpoint, LinkRuntimeState, NodeId, TransportError,
+    TransportIngressEvent, TransportKind,
 };
 use jacquard_host_support::DispatchReceiver;
 use jacquard_traits::{TransportDriver, TransportSenderEffects};
@@ -594,15 +594,9 @@ async fn accepted_l2cap_channels_register_and_downgrade_to_gatt_on_close() {
     task.testing_seed_resolved_peer(DeviceId::from("mock-central"), remote_node_id);
     task.testing_seed_sessions(
         remote_node_id,
-        PeerSessions {
-            preferred_ingress: Some(BleSession::GattPeripheralSubscribed {
-                device_id: DeviceId::from("mock-central"),
-            }),
-            preferred_egress: Some(BleSession::GattPeripheralSubscribed {
-                device_id: DeviceId::from("mock-central"),
-            }),
-            fallback_egress: None,
-        },
+        PeerSessions::gatt_only(BleSession::GattPeripheralSubscribed {
+            device_id: DeviceId::from("mock-central"),
+        }),
     );
     let runtime_task = tokio::spawn(task.testing_run());
 
@@ -754,7 +748,7 @@ async fn disconnect_clears_gatt_session_state_per_device_id_policy() {
     let (_remote_central_link, peripheral_link) = MockLink::pair();
     let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
 
-    let (mut task, (_driver, _sender, _outbound, _control, _notifier)) = BleRuntimeTask::new(
+    let (mut task, (mut driver, _sender, _outbound, _control, _notifier)) = BleRuntimeTask::new(
         NodeId([1; 32]),
         runtime_central,
         runtime_peripheral,
@@ -766,15 +760,9 @@ async fn disconnect_clears_gatt_session_state_per_device_id_policy() {
     task.testing_seed_resolved_peer(device_id.clone(), node_id);
     task.testing_seed_sessions(
         node_id,
-        PeerSessions {
-            preferred_ingress: Some(BleSession::GattCentral {
-                device_id: device_id.clone(),
-            }),
-            preferred_egress: Some(BleSession::GattCentral {
-                device_id: device_id.clone(),
-            }),
-            fallback_egress: None,
-        },
+        PeerSessions::gatt_only(BleSession::GattCentral {
+            device_id: device_id.clone(),
+        }),
     );
 
     task.testing_handle_central_event(CentralEvent::DeviceDisconnected {
@@ -785,4 +773,18 @@ async fn disconnect_clears_gatt_session_state_per_device_id_policy() {
     assert!(!task.testing_identity_resolved_for_device(&device_id));
     assert_eq!(task.testing_session_count(), 0);
     assert!(!task.testing_has_egress_session_for_device(&device_id));
+
+    let ingress = driver.drain_transport_ingress().expect("drain ingress");
+    assert!(ingress.iter().any(|event| {
+        matches!(
+            event,
+            TransportIngressEvent::LinkObserved {
+                remote_node_id,
+                link,
+                ..
+            } if *remote_node_id == node_id
+                && link.endpoint == gatt_endpoint(&device_id)
+                && link.state.state == LinkRuntimeState::Faulted
+        )
+    }));
 }

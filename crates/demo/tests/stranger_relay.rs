@@ -31,10 +31,10 @@ use jacquard_host_support::{
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
 use jacquard_mercator::MERCATOR_ENGINE_ID;
 use jacquard_traits::{TransportSenderEffects, effect_handler};
-use jq_client::{
-    BleBridgeIo, BleClientError, JacquardBleClient, decode_client_payload_for_testing,
-    encode_client_payload_for_testing,
+use jq_client::test_support::{
+    decode_client_payload_for_testing, encode_client_payload_for_testing,
 };
+use jq_client::{BleBridgeIo, BleClientError, JacquardBleClient};
 use jq_node_profile::MeshTopology;
 
 // Magic prefix that marks a harness application frame. The service layer uses
@@ -914,6 +914,7 @@ async fn service_events_surface_start_topology_discovery_and_incoming_payloads()
         match event {
             JacquardBleEvent::Incoming { message } => {
                 assert_eq!(message.from_node_id, remote_node_id);
+                assert_eq!(message.transport_from_node_id, remote_node_id);
                 assert_eq!(message.payload, b"hello from jacquard");
                 return;
             }
@@ -1059,6 +1060,7 @@ async fn five_node_line_relays_end_to_end_without_exposing_intermediaries_to_end
     )
     .await;
     assert_eq!(received_by_e.from_node_id, node_a);
+    assert_eq!(received_by_e.transport_from_node_id, node_d);
     assert_eq!(received_by_e.payload, b"unknown-intermediary");
 
     // B, C, and D relay the frame but must not surface it as an incoming message.

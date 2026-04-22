@@ -49,6 +49,7 @@ impl Default for RelayRetryPolicy {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JacquardIncomingMessage {
     pub from_node_id: NodeId,
+    pub transport_from_node_id: NodeId,
     pub payload: Vec<u8>,
 }
 
@@ -276,16 +277,7 @@ impl JacquardBleService {
 
     #[must_use = "dropping the incoming stream discards service payload events"]
     pub fn incoming_messages(&self) -> impl Stream<Item = JacquardIncomingMessage> + Send + '_ {
-        stream::unfold(self.inner.incoming.subscribe(), |mut receiver| async move {
-            // Loop exits on RecvError::Closed when all incoming senders are dropped.
-            loop {
-                match receiver.recv().await {
-                    Ok(message) => return Some((message, receiver)),
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => return None,
-                }
-            }
-        })
+        broadcast_receiver_stream(self.inner.incoming.subscribe())
     }
 
     #[must_use = "dropping the topology stream discards service topology updates"]
@@ -295,36 +287,14 @@ impl JacquardBleService {
 
     #[must_use = "dropping the relay-drop stream discards relay failure events"]
     pub fn relay_drops(&self) -> impl Stream<Item = JacquardRelayDrop> + Send + '_ {
-        stream::unfold(
-            self.inner.relay_drops.subscribe(),
-            |mut receiver| async move {
-                loop {
-                    match receiver.recv().await {
-                        Ok(relay) => return Some((relay, receiver)),
-                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(broadcast::error::RecvError::Closed) => return None,
-                    }
-                }
-            },
-        )
+        broadcast_receiver_stream(self.inner.relay_drops.subscribe())
     }
 
     #[must_use = "dropping the peer-update stream discards introduction events"]
     pub fn introduced_peer_updates(
         &self,
     ) -> impl Stream<Item = JacquardIntroducedPeer> + Send + '_ {
-        stream::unfold(
-            self.inner.introduced_peer_updates.subscribe(),
-            |mut receiver| async move {
-                loop {
-                    match receiver.recv().await {
-                        Ok(peer) => return Some((peer, receiver)),
-                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(broadcast::error::RecvError::Closed) => return None,
-                    }
-                }
-            },
-        )
+        broadcast_receiver_stream(self.inner.introduced_peer_updates.subscribe())
     }
 
     #[must_use = "dropping the event stream discards service lifecycle and payload events"]
@@ -414,6 +384,24 @@ fn decode_peer_invite(invite: &str) -> Result<NodeId, JacquardPeerInviteError> {
     Ok(NodeId(node_id))
 }
 
+fn broadcast_receiver_stream<T>(
+    receiver: broadcast::Receiver<T>,
+) -> impl Stream<Item = T> + Send + 'static
+where
+    T: Clone + Send + 'static,
+{
+    stream::unfold(receiver, |mut receiver| async move {
+        // Loop exits on RecvError::Closed when all senders are dropped.
+        loop {
+            match receiver.recv().await {
+                Ok(item) => return Some((item, receiver)),
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+}
+
 struct ApplicationFrame {
     from_node_id: NodeId,
     destination_node_id: NodeId,
@@ -439,7 +427,7 @@ fn encode_application_frame(
     framed
 }
 
-fn decode_application_frame(payload: &[u8], _local_node_id: NodeId) -> Option<ApplicationFrame> {
+fn decode_application_frame(payload: &[u8]) -> Option<ApplicationFrame> {
     let header_len = APPLICATION_FRAME_MAGIC.len() + 32 + 32;
     if payload.len() < header_len || !payload.starts_with(APPLICATION_FRAME_MAGIC) {
         return None;
@@ -472,10 +460,9 @@ fn spawn_application_pump(
         let local_node_id = client.local_node_id();
         let mut transport_incoming = Box::pin(client.incoming());
         // Loop exits when the client's incoming stream is exhausted on shutdown.
-        while let Some((_transport_from_node_id, payload)) =
-            transport_incoming.as_mut().next().await
+        while let Some((transport_from_node_id, payload)) = transport_incoming.as_mut().next().await
         {
-            let Some(frame) = decode_application_frame(&payload, local_node_id) else {
+            let Some(frame) = decode_application_frame(&payload) else {
                 // Drop anything that isn't a recognized application frame (e.g. internal Jacquard traffic).
                 continue;
             };
@@ -485,6 +472,7 @@ fn spawn_application_pump(
                 // allow-ignored-result: incoming fanout is best-effort when no application listener is attached
                 let _ = incoming.send(JacquardIncomingMessage {
                     from_node_id: frame.from_node_id,
+                    transport_from_node_id,
                     payload: frame.payload,
                 });
                 continue;
@@ -525,7 +513,7 @@ async fn relay_framed_payload(
 ) -> bool {
     for attempt in 0..relay_retry_policy.max_attempts {
         match client.send(destination_node_id, payload).await {
-            Ok(()) => return true,
+            Ok(_) => return true,
             Err(error)
                 if relay_retryable(&error) && attempt + 1 < relay_retry_policy.max_attempts =>
             {
@@ -710,7 +698,10 @@ impl JacquardBleHostState {
 
 #[cfg(test)]
 mod tests {
-    use super::{JacquardPeerInviteError, decode_peer_invite, encode_peer_invite};
+    use super::{
+        JacquardPeerInviteError, decode_application_frame, decode_peer_invite,
+        encode_application_frame, encode_peer_invite,
+    };
     use jacquard_core::NodeId;
 
     fn node_id(byte: u8) -> NodeId {
@@ -736,5 +727,17 @@ mod tests {
         let err = decode_peer_invite("wrong-scheme:///add-peer/deadbeef")
             .expect_err("wrong scheme should fail");
         assert!(matches!(err, JacquardPeerInviteError::InvalidScheme { .. }));
+    }
+
+    #[test]
+    fn application_frame_preserves_claimed_source_for_relay() {
+        let claimed_source = node_id(1);
+        let destination = node_id(3);
+        let payload = encode_application_frame(claimed_source, destination, b"relay");
+        let frame = decode_application_frame(&payload).expect("decode application frame");
+
+        assert_eq!(frame.from_node_id, claimed_source);
+        assert_eq!(frame.destination_node_id, destination);
+        assert_eq!(frame.payload, b"relay");
     }
 }

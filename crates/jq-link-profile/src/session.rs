@@ -1,8 +1,7 @@
 //! Session resolution helpers for the BLE runtime task.
 //!
 //! Pure functions operating on [`PeerSessions`] and [`BleSession`]: device
-//! lookup, remote `NodeId` and PSM reads over GATT, endpoint construction,
-//! and GATT fallback selection.
+//! lookup, remote `NodeId` and PSM reads over GATT, and endpoint construction.
 
 use blew::central::Central;
 use blew::central::backend::CentralBackend;
@@ -10,35 +9,12 @@ use blew::l2cap::types::Psm;
 use blew::types::DeviceId;
 use jacquard_core::{LinkEndpoint, NodeId};
 
-use crate::gatt::{
-    JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_PSM_CHAR_UUID, gatt_endpoint, l2cap_endpoint,
-    parse_psm_value,
-};
+use crate::gatt::{JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_PSM_CHAR_UUID, parse_psm_value};
 use crate::transport::{BleSession, PeerSessions};
-
-/// Iterates all session slots in canonical order: ingress preferred → egress preferred → egress fallback.
-fn iter_session_slots(sessions: &PeerSessions) -> impl Iterator<Item = &BleSession> {
-    [
-        sessions.preferred_ingress.as_ref(),
-        sessions.preferred_egress.as_ref(),
-        sessions.fallback_egress.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-}
 
 #[must_use]
 pub(crate) fn session_references_device(sessions: &PeerSessions, device_id: &DeviceId) -> bool {
-    iter_session_slots(sessions).any(|session| session_device_id(session) == device_id)
-}
-
-#[must_use]
-pub(crate) fn session_device_id(session: &BleSession) -> &DeviceId {
-    match session {
-        BleSession::GattCentral { device_id }
-        | BleSession::GattPeripheralSubscribed { device_id }
-        | BleSession::L2cap { device_id, .. } => device_id,
-    }
+    sessions.references_device(device_id)
 }
 
 pub(crate) async fn resolve_remote_node_id<CB: CentralBackend>(
@@ -85,25 +61,6 @@ pub(crate) fn device_id_from_endpoint(endpoint: &LinkEndpoint) -> Option<DeviceI
 }
 
 #[must_use]
-pub(crate) fn first_gatt_fallback(sessions: &PeerSessions) -> Option<BleSession> {
-    // Intentionally egress-first: when downgrading from L2CAP we want the best outbound GATT
-    // session, not the canonical ingress-preferred order used by iter_session_slots.
-    [
-        sessions.preferred_egress.as_ref(),
-        sessions.preferred_ingress.as_ref(),
-        sessions.fallback_egress.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|session| !matches!(session, BleSession::L2cap { .. }))
-    .cloned()
-}
-
-#[must_use]
 pub(crate) fn endpoint_for_session(session: &BleSession) -> LinkEndpoint {
-    match session {
-        BleSession::GattCentral { device_id }
-        | BleSession::GattPeripheralSubscribed { device_id } => gatt_endpoint(device_id),
-        BleSession::L2cap { device_id, .. } => l2cap_endpoint(device_id),
-    }
+    session.endpoint()
 }

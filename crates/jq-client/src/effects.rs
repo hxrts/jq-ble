@@ -80,6 +80,7 @@ impl OrderEffects for BleRuntimeEffects {
     }
 }
 
+// In-memory only; survives the client runtime thread but not process restart.
 #[effect_handler]
 impl StorageEffects for BleRuntimeEffects {
     fn load_bytes(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {

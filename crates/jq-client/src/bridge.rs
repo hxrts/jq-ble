@@ -76,6 +76,7 @@ pub trait BleBridgeIo {
     fn notifier(&self) -> &TransportIngressNotifier;
 }
 
+// Tick/round cadence lives on the host bridge per the architectural rule — the BLE runtime never advances Jacquard time.
 pub trait BleBridgeTickSource {
     fn advance_tick(&mut self) -> Tick;
 }
