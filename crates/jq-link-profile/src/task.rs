@@ -14,19 +14,17 @@ use blew::l2cap::{L2capChannel, types::Psm};
 use blew::peripheral::backend::PeripheralBackend;
 use blew::peripheral::{Peripheral, PeripheralEvent};
 use blew::types::DeviceId;
-use jacquard_adapter::{
+use jacquard_core::{LinkEndpoint, NodeId, TransportIngressEvent};
+use jacquard_host_support::{
     PeerDirectory, PendingClaims, TransportIngressClass, TransportIngressSender, dispatch_mailbox,
     transport_ingress_mailbox,
-};
-use jacquard_core::{
-    DurationMs, LinkBuilder, LinkEndpoint, LinkRuntimeState, NodeId, OriginAuthenticationClass,
-    PartitionRecoveryClass, RepairCapability, RoutingEvidenceClass, TransportIngressEvent,
 };
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use blew::util::event_stream::EventStream;
 
+use crate::cast::raw_ble_link_observed_event;
 use crate::gatt::{
     JACQUARD_C2P_CHAR_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
     JACQUARD_PSM_CHAR_UUID, gatt_endpoint, gatt_fallback_service, gatt_l2cap_service,
@@ -271,7 +269,7 @@ where
             CentralEvent::DeviceDisconnected { device_id } => {
                 let key = BlePeerKey::from(&device_id);
                 let removed = self.peers.remove(&key);
-                if let Some(jacquard_adapter::PeerIdentityState::Resolved(node_id)) = removed {
+                if let Some(jacquard_host_support::PeerIdentityState::Resolved(node_id)) = removed {
                     self.drop_l2cap_channels_for_node(node_id);
                 }
                 self.sessions
@@ -325,7 +323,7 @@ where
         };
 
         // Only proceed if we have a prior hint for this device; avoids accepting unsolicited connections.
-        let jacquard_adapter::PeerIdentityState::Hint(hint) = identity_state else {
+        let jacquard_host_support::PeerIdentityState::Hint(hint) = identity_state else {
             return;
         };
 
@@ -605,7 +603,7 @@ where
             .peers
             .identity_state(&crate::transport::BlePeerKey::from(device_id))
         {
-            Some(jacquard_adapter::PeerIdentityState::Resolved(node_id)) => Some(*node_id),
+            Some(jacquard_host_support::PeerIdentityState::Resolved(node_id)) => Some(*node_id),
             _ => None,
         }
     }
@@ -781,22 +779,6 @@ where
     }
 
     fn emit_link_observed(&mut self, remote_node_id: NodeId, endpoint: LinkEndpoint) {
-        let link = LinkBuilder::new(endpoint)
-            .with_profile(
-                // 150ms RTT estimate reflects typical BLE connection interval plus stack latency.
-                DurationMs(150),
-                RepairCapability::TransportRetransmit,
-                PartitionRecoveryClass::LocalReconnect,
-            )
-            .with_runtime_state(LinkRuntimeState::Active)
-            .build();
-
-        self.emit_control_event(TransportIngressEvent::LinkObserved {
-            remote_node_id,
-            link,
-            source_class: jacquard_core::FactSourceClass::Local,
-            evidence_class: RoutingEvidenceClass::DirectObservation,
-            origin_authentication: OriginAuthenticationClass::Unauthenticated,
-        });
+        self.emit_control_event(raw_ble_link_observed_event(remote_node_id, endpoint));
     }
 }

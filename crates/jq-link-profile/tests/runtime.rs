@@ -11,11 +11,11 @@ use blew::testing::MockLink;
 use blew::types::DeviceId;
 use bytes::Bytes;
 use futures_util::SinkExt;
-use jacquard_adapter::DispatchReceiver;
 use jacquard_core::{
     ByteCount, EndpointLocator, LinkEndpoint, NodeId, TransportError, TransportIngressEvent,
     TransportKind,
 };
+use jacquard_host_support::DispatchReceiver;
 use jacquard_traits::{TransportDriver, TransportSenderEffects};
 use jq_link_profile::{
     BleConfig, BleOutboundCommand, BleRuntimeTask, BleSession, BleTransportDriver,

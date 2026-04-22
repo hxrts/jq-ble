@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
-use jacquard_adapter::opaque_endpoint;
 use jacquard_batman_bellman::{BATMAN_BELLMAN_ENGINE_ID, BatmanBellmanEngine};
 use jacquard_core::{
     ByteCount, Configuration, ConnectivityPosture, ControllerId, DestinationId, DurationMs,
@@ -25,6 +24,7 @@ use jacquard_core::{
     RoutingEvidenceClass, RoutingObjective, RoutingPolicyInputs, RoutingTickHint,
     SelectedRoutingParameters, Tick, TransportError, TransportKind, TransportObservation,
 };
+use jacquard_host_support::opaque_endpoint;
 use jacquard_mem_link_profile::InMemoryRetentionStore;
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
 use jacquard_pathway::{DeterministicPathwayTopologyModel, PATHWAY_ENGINE_ID, PathwayEngine};
@@ -490,8 +490,13 @@ impl JacquardBleClient {
                     let _ = projector.ingest_engine_capabilities(capabilities);
                 }
             }
-            let bridge =
-                BleHostBridge::with_clock(router, transport, effects, BleBridgeConfig::default());
+            let bridge = BleHostBridge::with_clock(
+                local_node_id,
+                router,
+                transport,
+                effects,
+                BleBridgeConfig::default(),
+            );
             let task = ClientTask {
                 local_node_id,
                 bridge,

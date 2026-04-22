@@ -9,15 +9,15 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use jacquard_adapter::{
-    DispatchReceiver, DispatchSender, TransportIngressClass, TransportIngressNotifier,
-    dispatch_mailbox, transport_ingress_mailbox,
-};
 use jacquard_core::{
     ByteCount, EndpointLocator, FactSourceClass, LinkBuilder, LinkRuntimeState, NodeId,
     OriginAuthenticationClass, RepairCapability, RouteEpoch, RouterCanonicalMutation,
     RoutingEvidenceClass, RoutingTickChange, RoutingTickHint, Tick, TransportError,
     TransportIngressEvent, TransportKind, TransportObservation,
+};
+use jacquard_host_support::{
+    DispatchReceiver, DispatchSender, TransportIngressClass, TransportIngressNotifier,
+    dispatch_mailbox, transport_ingress_mailbox,
 };
 use jq_client::{
     BleBridgeConfig, BleBridgeIo, BleBridgeProgress, BleBridgeRouter, BleBridgeWaitDecision,
@@ -115,8 +115,8 @@ impl BleBridgeRouter for TestRouter {
 }
 
 struct FakeTransport {
-    ingress_sender: jacquard_adapter::TransportIngressSender,
-    ingress_receiver: jacquard_adapter::TransportIngressReceiver,
+    ingress_sender: jacquard_host_support::TransportIngressSender,
+    ingress_receiver: jacquard_host_support::TransportIngressReceiver,
     notifier: TransportIngressNotifier,
     pending_outbound_tx: DispatchSender<Vec<u8>>,
     pending_outbound_rx: DispatchReceiver<Vec<u8>>,
@@ -173,7 +173,13 @@ async fn ingress_is_stamped_in_bridge_only() {
     let ingress_sender = transport.ingress_sender.clone();
     let router = TestRouter::new(RoutingTickHint::HostDefault, RoutingTickChange::NoChange);
     let ingested = router.ingested.clone();
-    let mut bridge = BleHostBridge::new(router, transport, Tick(9), BleBridgeConfig::default());
+    let mut bridge = BleHostBridge::new(
+        NodeId([1; 32]),
+        router,
+        transport,
+        Tick(9),
+        BleBridgeConfig::default(),
+    );
 
     ingress_sender
         .emit(TransportIngressClass::Control, link_observed(7))
@@ -187,6 +193,10 @@ async fn ingress_is_stamped_in_bridge_only() {
     match &report.ingested_transport_observations[0] {
         TransportObservation::LinkObserved { observation, .. } => {
             assert_eq!(observation.observed_at_tick, Tick(9));
+            assert_eq!(
+                observation.value.state.delivery_confidence_permille,
+                jacquard_core::Belief::certain(jacquard_core::RatioPermille(700), Tick(9))
+            );
         }
         other => panic!("unexpected observation: {other:?}"),
     }
@@ -198,6 +208,7 @@ async fn wait_decision_uses_notifier_and_router_hint() {
     let transport = FakeTransport::new();
     let ingress_sender = transport.ingress_sender.clone();
     let mut bridge = BleHostBridge::new(
+        NodeId([1; 32]),
         TestRouter::new(RoutingTickHint::HostDefault, RoutingTickChange::NoChange),
         transport,
         Tick(1),
@@ -249,6 +260,7 @@ async fn outbound_batches_are_flushed_after_round_in_fifo_order() {
     let outbound_queue = transport.pending_outbound_tx.clone();
     let flushed = transport.flushed_outbound.clone();
     let mut bridge = BleHostBridge::new(
+        NodeId([1; 32]),
         TestRouter::with_outbound_queue(
             RoutingTickHint::HostDefault,
             RoutingTickChange::PrivateStateUpdated,

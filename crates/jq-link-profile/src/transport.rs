@@ -8,10 +8,10 @@
 use blew::central::Central;
 use blew::peripheral::Peripheral;
 use blew::types::DeviceId;
-use jacquard_adapter::{
+use jacquard_core::{LinkEndpoint, NodeId, TransportError};
+use jacquard_host_support::{
     DispatchReceiver, DispatchSender, TransportIngressNotifier, TransportIngressReceiver,
 };
-use jacquard_core::{LinkEndpoint, NodeId, TransportError};
 use jacquard_traits::{TransportDriver, TransportSenderEffects, effect_handler};
 use thiserror::Error;
 use tokio::sync::mpsc;

@@ -7,11 +7,11 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use jacquard_adapter::{TransportIngressClass, dispatch_mailbox};
 use jacquard_core::{
     LinkBuilder, LinkEndpoint, LinkRuntimeState, NodeId, PartitionRecoveryClass, RepairCapability,
     TransportIngressEvent, TransportKind,
 };
+use jacquard_host_support::{TransportIngressClass, dispatch_mailbox};
 use jq_client::{
     JacquardBleClient, decode_client_payload_for_testing, encode_client_payload_for_testing,
 };

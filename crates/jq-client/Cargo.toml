@@ -12,9 +12,9 @@ categories = ["network-programming"]
 [dependencies]
 bytes = "1"
 futures-util = "0.3"
-jacquard-adapter = { workspace = true }
 jacquard-batman-bellman = { workspace = true }
 jacquard-core = { workspace = true }
+jacquard-host-support = { workspace = true }
 jacquard-mem-link-profile = { workspace = true }
 jacquard-mem-node-profile = { workspace = true }
 jacquard-pathway = { workspace = true }

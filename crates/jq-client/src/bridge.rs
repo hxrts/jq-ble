@@ -12,14 +12,17 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 
-use jacquard_adapter::{DispatchReceiver, TransportIngressNotifier};
 use jacquard_core::{
-    RouteError, RouterRoundOutcome, RoutingTickChange, RoutingTickHint, Tick, TransportError,
-    TransportIngressEvent, TransportObservation,
+    NodeId, OrderStamp, RouteError, RouterRoundOutcome, RoutingTickChange, RoutingTickHint, Tick,
+    TransportError, TransportIngressEvent, TransportObservation,
 };
-use jacquard_traits::{RoutingControlPlane, RoutingMiddleware, TransportDriver};
+use jacquard_host_support::{DispatchReceiver, TransportIngressNotifier};
+use jacquard_traits::{
+    OrderEffects, RoutingControlPlane, RoutingMiddleware, TransportDriver, effect_handler,
+};
 use jq_link_profile::{
     BleDriverControl, BleOutboundCommand, BleTransportComponents, BleTransportDriver,
+    link_observation_from_ble_event,
 };
 use thiserror::Error;
 
@@ -80,6 +83,7 @@ pub trait BleBridgeTickSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MonotonicBleTickSource {
     next_tick: Tick,
+    next_order: u64,
 }
 
 impl MonotonicBleTickSource {
@@ -87,6 +91,7 @@ impl MonotonicBleTickSource {
     pub fn new(initial_tick: Tick) -> Self {
         Self {
             next_tick: initial_tick,
+            next_order: 0,
         }
     }
 }
@@ -94,9 +99,17 @@ impl MonotonicBleTickSource {
 impl BleBridgeTickSource for MonotonicBleTickSource {
     fn advance_tick(&mut self) -> Tick {
         let tick = self.next_tick;
-        // Saturating prevents wrapping so the clock stalls rather than going backwards.
+        // Saturating prevents wrapping so the clock stalls rather than decreasing.
         self.next_tick = Tick(self.next_tick.0.saturating_add(1));
         tick
+    }
+}
+
+#[effect_handler]
+impl OrderEffects for MonotonicBleTickSource {
+    fn next_order_stamp(&mut self) -> OrderStamp {
+        self.next_order = self.next_order.saturating_add(1);
+        OrderStamp(self.next_order)
     }
 }
 
@@ -226,6 +239,7 @@ impl BleBridgeWaitDecision {
 }
 
 pub struct BleHostBridge<Router, Transport = BleBridgeTransport, Clock = MonotonicBleTickSource> {
+    local_node_id: NodeId,
     router: Router,
     transport: Transport,
     clock: Clock,
@@ -241,6 +255,7 @@ where
 {
     #[must_use]
     pub fn new(
+        local_node_id: NodeId,
         router: Router,
         transport: Transport,
         initial_tick: Tick,
@@ -248,6 +263,7 @@ where
     ) -> Self {
         // recursion-exception: constructor delegates to the clock-injecting constructor with the same semantic name
         Self::with_clock(
+            local_node_id,
             router,
             transport,
             MonotonicBleTickSource::new(initial_tick),
@@ -260,16 +276,18 @@ impl<Router, Transport, Clock> BleHostBridge<Router, Transport, Clock>
 where
     Router: BleBridgeRouter,
     Transport: BleBridgeIo,
-    Clock: BleBridgeTickSource,
+    Clock: BleBridgeTickSource + OrderEffects,
 {
     #[must_use]
     pub fn with_clock(
+        local_node_id: NodeId,
         router: Router,
         transport: Transport,
         clock: Clock,
         config: BleBridgeConfig,
     ) -> Self {
         Self {
+            local_node_id,
             router,
             transport,
             clock,
@@ -379,11 +397,38 @@ where
                     self.dropped_transport_observations.saturating_add(1);
                 continue;
             }
-            // Promote raw BLE event to a Jacquard observation by attaching the current tick.
-            self.pending_transport_observations
-                .push_back(event.observe_at(observed_at_tick));
+            let observation = self.observe_transport_ingress(event, observed_at_tick);
+            self.pending_transport_observations.push_back(observation);
         }
         Ok(())
+    }
+
+    fn observe_transport_ingress(
+        &mut self,
+        event: TransportIngressEvent,
+        observed_at_tick: Tick,
+    ) -> TransportObservation {
+        match event {
+            TransportIngressEvent::PayloadReceived {
+                from_node_id,
+                endpoint,
+                payload,
+            } => TransportIngressEvent::PayloadReceived {
+                from_node_id,
+                endpoint,
+                payload,
+            }
+            .observe_at(observed_at_tick),
+            link_event @ TransportIngressEvent::LinkObserved { .. } => {
+                let order = self.clock.next_order_stamp();
+                link_observation_from_ble_event(
+                    self.local_node_id,
+                    link_event,
+                    observed_at_tick,
+                    order,
+                )
+            }
+        }
     }
 }
 

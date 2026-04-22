@@ -66,6 +66,6 @@ Repo-specific lint and enforcement configuration lives in `toolkit/toolkit.toml`
 
 ## Editing Expectations
 
-- Keep changes scoped to the Jacquard adapter crates in this repo.
+- Keep changes scoped to the Jacquard BLE profile crates in this repo.
 - Avoid introducing hidden async ownership into Jacquard-facing APIs.
 - Prefer tests that drive the bridge deterministically rather than depending on ambient timing.

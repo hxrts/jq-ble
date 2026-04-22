@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use jacquard_adapter::{TransportIngressClass, dispatch_mailbox};
 use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     Configuration, ControllerId, Environment, FactSourceClass, LinkBuilder, LinkEndpoint,
@@ -17,6 +16,7 @@ use jacquard_core::{
     RatioPermille, RepairCapability, RouteEpoch, RoutingEvidenceClass, Tick, TransportIngressEvent,
     TransportKind,
 };
+use jacquard_host_support::{TransportIngressClass, dispatch_mailbox};
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
 use jacquard_pathway::PATHWAY_ENGINE_ID;
 use jq_client::JacquardBleClient;
@@ -372,7 +372,7 @@ async fn topology_api_tracks_discovery_upgrade_and_disconnect_like_events() {
             .value
             .profile
             .latency_floor_ms,
-        jacquard_core::DurationMs(25)
+        jacquard_core::DurationMs(150)
     );
 
     ingress_sender
@@ -417,7 +417,7 @@ async fn topology_api_tracks_discovery_upgrade_and_disconnect_like_events() {
     assert_eq!(downgraded_edge.transport_kind(), &TransportKind::BleGatt);
     assert_eq!(
         downgraded_edge.observation.value.state.state,
-        LinkRuntimeState::Degraded
+        LinkRuntimeState::Active
     );
 }
 

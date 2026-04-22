@@ -2,20 +2,20 @@
 //!
 //! [`TopologyProjector`] owns a local BLE-updated
 //! [`Observation<Configuration>`], feeds that into
-//! `jacquard_adapter::TopologyProjector`, and then projects the generic
+//! `jacquard_host_support::TopologyProjector`, and then projects the generic
 //! snapshot into this repo's richer [`MeshTopology`] API.
 
 use std::collections::BTreeMap;
 
-use jacquard_adapter::{
-    ObservedLink, ObservedNode, ObservedRoute, ObservedRouteShape,
-    TopologyProjector as AdapterTopologyProjector,
-};
 use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     Configuration, ControllerId, DestinationId, FactSourceClass, Link, LinkRuntimeState, Node,
     NodeId, Observation, OriginAuthenticationClass, RouteShapeVisibility, RouterRoundOutcome,
     RoutingEngineCapabilities, Tick, TransportKind, TransportObservation,
+};
+use jacquard_host_support::{
+    ObservedLink, ObservedNode, ObservedRoute, ObservedRouteShape,
+    TopologyProjector as HostTopologyProjector,
 };
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
 use jacquard_pathway::PATHWAY_ENGINE_ID;
@@ -26,7 +26,7 @@ use jq_node_profile::{
 pub(crate) struct TopologyProjector {
     topology: Observation<Configuration>,
     edge_observations: BTreeMap<(NodeId, NodeId), Observation<Link>>,
-    generic: AdapterTopologyProjector,
+    host_projector: HostTopologyProjector,
     snapshot: MeshTopology,
 }
 
@@ -51,12 +51,12 @@ impl TopologyProjector {
                 )
             })
             .collect();
-        let generic = AdapterTopologyProjector::new(local_node_id, initial_topology.clone());
-        let snapshot = mesh_snapshot_from(&edge_observations, generic.snapshot());
+        let host_projector = HostTopologyProjector::new(local_node_id, initial_topology.clone());
+        let snapshot = mesh_snapshot_from(&edge_observations, host_projector.snapshot());
         Self {
             topology: initial_topology,
             edge_observations,
-            generic,
+            host_projector,
             snapshot,
         }
     }
@@ -76,8 +76,8 @@ impl TopologyProjector {
         &mut self,
         capabilities: RoutingEngineCapabilities,
     ) -> bool {
-        // recursion-exception: same-name delegation keeps projector updates aligned with the adapter projector surface
-        self.generic.ingest_engine_capabilities(capabilities);
+        // recursion-exception: same-name delegation keeps projector updates aligned with the host-support projector surface
+        self.host_projector.ingest_engine_capabilities(capabilities);
         self.refresh_snapshot()
     }
 
@@ -86,15 +86,15 @@ impl TopologyProjector {
         &mut self,
         route: &jacquard_core::MaterializedRoute,
     ) -> bool {
-        // recursion-exception: same-name delegation keeps projector updates aligned with the adapter projector surface
-        self.generic.ingest_materialized_route(route);
+        // recursion-exception: same-name delegation keeps projector updates aligned with the host-support projector surface
+        self.host_projector.ingest_materialized_route(route);
         self.refresh_snapshot()
     }
 
     #[must_use]
     pub(crate) fn ingest_round_outcome(&mut self, outcome: &RouterRoundOutcome) -> bool {
-        // recursion-exception: same-name delegation keeps projector updates aligned with the adapter projector surface
-        self.generic.ingest_round_outcome(outcome);
+        // recursion-exception: same-name delegation keeps projector updates aligned with the host-support projector surface
+        self.host_projector.ingest_round_outcome(outcome);
         self.refresh_snapshot()
     }
 
@@ -103,7 +103,7 @@ impl TopologyProjector {
         &mut self,
         observation: &TransportObservation,
     ) -> bool {
-        // recursion-exception: same-name delegation keeps projector updates aligned with the adapter projector surface
+        // recursion-exception: same-name delegation keeps projector updates aligned with the host-support projector surface
         let changed = match observation {
             // A received payload confirms the peer is still reachable so we advance the topology clock.
             TransportObservation::PayloadReceived {
@@ -139,12 +139,13 @@ impl TopologyProjector {
         }
 
         // Propagate the updated local topology into the generic projector before refreshing the snapshot.
-        self.generic.ingest_topology(self.topology.clone());
+        self.host_projector.ingest_topology(self.topology.clone());
         self.refresh_snapshot()
     }
 
     fn refresh_snapshot(&mut self) -> bool {
-        let next_snapshot = mesh_snapshot_from(&self.edge_observations, self.generic.snapshot());
+        let next_snapshot =
+            mesh_snapshot_from(&self.edge_observations, self.host_projector.snapshot());
         // Equality check avoids spurious topology-changed notifications when nothing materially changed.
         if next_snapshot == self.snapshot {
             return false;
@@ -190,7 +191,7 @@ impl TopologyProjector {
 
 fn mesh_snapshot_from(
     edge_observations: &BTreeMap<(NodeId, NodeId), Observation<Link>>,
-    generic_snapshot: &jacquard_adapter::TopologySnapshot,
+    generic_snapshot: &jacquard_host_support::TopologySnapshot,
 ) -> MeshTopology {
     let nodes = generic_snapshot
         .nodes

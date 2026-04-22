@@ -10,13 +10,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use jacquard_adapter::{
-    DispatchReceiver, DispatchSender, TransportIngressNotifier, transport_ingress_mailbox,
-};
 use jacquard_core::{
     ByteCount, Configuration, EndpointLocator, Environment, FactSourceClass, LinkEndpoint, NodeId,
     Observation, OriginAuthenticationClass, RatioPermille, RouteEpoch, RoutingEvidenceClass, Tick,
     TransportError, TransportIngressEvent, TransportKind,
+};
+use jacquard_host_support::{
+    DispatchReceiver, DispatchSender, TransportIngressNotifier, transport_ingress_mailbox,
 };
 use jacquard_testkit::topology;
 use jacquard_traits::{TransportSenderEffects, effect_handler};
@@ -55,8 +55,8 @@ impl TransportSenderEffects for TestTransportSender {
 }
 
 pub struct FakeTransport {
-    pub ingress_sender: jacquard_adapter::TransportIngressSender,
-    pub ingress_receiver: jacquard_adapter::TransportIngressReceiver,
+    pub ingress_sender: jacquard_host_support::TransportIngressSender,
+    pub ingress_receiver: jacquard_host_support::TransportIngressReceiver,
     pub notifier: TransportIngressNotifier,
     pub outbound: DispatchReceiver<OutboundFrame>,
     pub flushed: Arc<Mutex<Vec<OutboundFrame>>>,

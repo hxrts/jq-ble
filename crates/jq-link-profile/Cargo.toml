@@ -13,8 +13,10 @@ categories = ["network-programming"]
 blew = { workspace = true }
 bytes = "1"
 futures-util = { version = "0.3", features = ["sink"] }
-jacquard-adapter = { workspace = true }
+jacquard-cast-support = { workspace = true }
 jacquard-core = { workspace = true }
+jacquard-host-support = { workspace = true }
+jacquard-mem-link-profile = { workspace = true }
 jacquard-traits = { workspace = true }
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "macros"] }

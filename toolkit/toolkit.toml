@@ -27,6 +27,7 @@ exclude_files = [
   "crates/jq-client/src/client.rs",
   "crates/jq-client/src/lib.rs",
   "crates/jq-client/src/projector.rs",
+  "crates/jq-link-profile/src/cast.rs",
   "crates/jq-link-profile/src/gatt.rs",
   "crates/jq-link-profile/src/l2cap.rs",
   "crates/jq-link-profile/src/lib.rs",

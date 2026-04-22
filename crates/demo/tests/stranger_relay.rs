@@ -20,10 +20,6 @@ use std::time::Duration;
 
 use demo::{JacquardBleEvent, JacquardBleHostState, JacquardBleService, JacquardBleServiceError};
 use futures_util::{FutureExt, Stream, StreamExt};
-use jacquard_adapter::{
-    DispatchReceiver, DispatchSender, TransportIngressClass, TransportIngressNotifier,
-    dispatch_mailbox, transport_ingress_mailbox,
-};
 use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     ByteCount, Configuration, ControllerId, Environment, FactSourceClass, LinkBuilder,
@@ -31,6 +27,10 @@ use jacquard_core::{
     PartitionRecoveryClass, RatioPermille, RepairCapability, RouteEpoch, RouteError,
     RouteSelectionError, RoutingEvidenceClass, Tick, TransportError, TransportIngressEvent,
     TransportKind,
+};
+use jacquard_host_support::{
+    DispatchReceiver, DispatchSender, TransportIngressClass, TransportIngressNotifier,
+    dispatch_mailbox, transport_ingress_mailbox,
 };
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
 use jacquard_pathway::PATHWAY_ENGINE_ID;
@@ -98,8 +98,8 @@ impl TransportSenderEffects for TestTransportSender {
 }
 
 struct FakeTransport {
-    ingress_sender: jacquard_adapter::TransportIngressSender,
-    ingress_receiver: jacquard_adapter::TransportIngressReceiver,
+    ingress_sender: jacquard_host_support::TransportIngressSender,
+    ingress_receiver: jacquard_host_support::TransportIngressReceiver,
     notifier: TransportIngressNotifier,
     outbound: DispatchReceiver<OutboundFrame>,
     flushed: Arc<Mutex<Vec<OutboundFrame>>>,
@@ -171,7 +171,7 @@ struct HarnessNode {
     node_id: NodeId,
     state: JacquardBleHostState,
     service: Arc<JacquardBleService>,
-    ingress_sender: jacquard_adapter::TransportIngressSender,
+    ingress_sender: jacquard_host_support::TransportIngressSender,
     flushed: Arc<Mutex<Vec<OutboundFrame>>>,
 }
 
