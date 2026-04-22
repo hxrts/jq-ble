@@ -9,7 +9,13 @@ docs_roots = ["docs", "toolkit"]
 
 [checks.proc_macro_scope]
 enabled = true
-include_paths = ["crates"]
+include_paths = [
+  "crates/demo/tests/stranger_relay.rs",
+  "crates/jq-client/src/bridge.rs",
+  "crates/jq-client/src/effects.rs",
+  "crates/jq-client/tests/common.rs",
+  "crates/jq-link-profile/src/transport.rs",
+]
 required_markers = [
   "#[effect_trait",
   "#[effect_handler",
@@ -20,22 +26,6 @@ required_markers = [
   "#[purity",
   "#[jacquard_traits::purity",
   "tell! {",
-]
-exclude_files = [
-  "crates/demo/src/lib.rs",
-  "crates/jq-client/src/bridge.rs",
-  "crates/jq-client/src/client.rs",
-  "crates/jq-client/src/lib.rs",
-  "crates/jq-client/src/projector.rs",
-  "crates/jq-link-profile/src/cast.rs",
-  "crates/jq-link-profile/src/gatt.rs",
-  "crates/jq-link-profile/src/l2cap.rs",
-  "crates/jq-link-profile/src/lib.rs",
-  "crates/jq-link-profile/src/session.rs",
-  "crates/jq-link-profile/src/task.rs",
-  "crates/jq-node-profile/src/authoring.rs",
-  "crates/jq-node-profile/src/lib.rs",
-  "crates/jq-node-profile/src/topology.rs",
 ]
 
 [checks.docs_semantic_drift]
