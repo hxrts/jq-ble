@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 
-use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     Configuration, ControllerId, DestinationId, FactSourceClass, Link, LinkRuntimeState, Node,
     NodeId, Observation, OriginAuthenticationClass, RouteShapeVisibility, RouterRoundOutcome,
@@ -18,7 +17,7 @@ use jacquard_host_support::{
     TopologyProjector as HostTopologyProjector,
 };
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
-use jacquard_pathway::PATHWAY_ENGINE_ID;
+use jacquard_mercator::MERCATOR_ENGINE_ID;
 use jq_node_profile::{
     ActiveRoute, ActiveRouteDelivery, MeshEdge, MeshNode, MeshNodeRole, MeshTopology,
 };
@@ -173,7 +172,7 @@ impl TopologyProjector {
             return false;
         }
 
-        // Synthesize a minimal node profile capable of participating in both routing engines.
+        // Synthesize a minimal node profile capable of participating in Mercator routing.
         let node = NodePreset::route_capable_for_engines(
             NodePresetOptions::new(
                 // ControllerId mirrors the NodeId bytes because BLE peers are their own controllers.
@@ -181,7 +180,7 @@ impl TopologyProjector {
                 endpoint.clone(),
                 observed_at_tick,
             ),
-            &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+            &[MERCATOR_ENGINE_ID],
         )
         .build();
         self.topology.value.nodes.insert(remote_node_id, node);

@@ -12,7 +12,7 @@ use jq_node_profile::{MeshEdge, MeshNode, MeshTopologyBuildError, active_route, 
 
 fn node(byte: u8) -> jacquard_core::Node {
     // recursion-exception: helper keeps the short `node` name while delegating to the reference topology builder
-    reference_topology::node(byte).pathway().build()
+    reference_topology::node(byte).for_engine(&engine()).build()
 }
 
 fn edge(

@@ -1,7 +1,7 @@
 //! Top-level BLE client handle.
 //!
 //! [`JacquardBleClient`] wires together the BLE transport, Jacquard router
-//! (Batman + Pathway), host bridge, and topology projector. It spawns a
+//! (Mercator), host bridge, and topology projector. It spawns a
 //! dedicated single-threaded runtime and exposes `send`, `incoming`, and
 //! `topology_stream` to the application.
 //!
@@ -15,21 +15,22 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
-use jacquard_batman_bellman::{BATMAN_BELLMAN_ENGINE_ID, BatmanBellmanEngine};
 use jacquard_core::{
     ByteCount, Configuration, ConnectivityPosture, ControllerId, DestinationId, DurationMs,
     Environment, FactSourceClass, HealthScore, HoldFallbackPolicy, IdentityAssuranceClass, Limit,
-    NodeId, Observation, OriginAuthenticationClass, PriorityPoints, RatioPermille, RouteEpoch,
-    RouteError, RoutePartitionClass, RouteProtectionClass, RouteRepairClass, RouteServiceKind,
-    RoutingEvidenceClass, RoutingObjective, RoutingPolicyInputs, RoutingTickHint,
-    SelectedRoutingParameters, Tick, TransportError, TransportKind, TransportObservation,
+    MaterializedRoute, NodeId, Observation, OriginAuthenticationClass, PriorityPoints,
+    RatioPermille, RouteEpoch, RouteError, RoutePartitionClass, RouteProtectionClass,
+    RouteRepairClass, RouteSelectionError, RouteServiceKind, RoutingEvidenceClass,
+    RoutingObjective, RoutingPolicyInputs, RoutingTickHint, SelectedRoutingParameters, Tick,
+    TransportError, TransportKind, TransportObservation,
 };
 use jacquard_host_support::opaque_endpoint;
-use jacquard_mem_link_profile::InMemoryRetentionStore;
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
-use jacquard_pathway::{DeterministicPathwayTopologyModel, PATHWAY_ENGINE_ID, PathwayEngine};
+use jacquard_mercator::{
+    MERCATOR_ENGINE_ID, MercatorEngine, selected_neighbor_from_backend_route_id,
+};
 use jacquard_router::{FixedPolicyEngine, MultiEngineRouter};
-use jacquard_traits::{Blake3Hashing, Router, RoutingDataPlane, TransportSenderEffects};
+use jacquard_traits::{Router, RoutingDataPlane, TransportSenderEffects};
 use jq_link_profile::{BleConfig, BleLinkError, BleTransportComponents};
 use jq_node_profile::MeshTopology;
 use thiserror::Error;
@@ -84,9 +85,10 @@ fn decode_client_payload(payload: &[u8]) -> Option<&[u8]> {
         .then_some(&payload[CLIENT_PAYLOAD_MAGIC.len()..])
 }
 
-struct ClientTask<Transport> {
+struct ClientTask<Transport, Sender> {
     local_node_id: NodeId,
     bridge: BleHostBridge<JacquardBleRouter, Transport, BleRuntimeEffects>,
+    transport_sender: Sender,
     commands: mpsc::Receiver<ClientCommand>,
     incoming: broadcast::Sender<(NodeId, Bytes)>,
     topology: Arc<Mutex<MeshTopology>>,
@@ -97,9 +99,10 @@ struct ClientTask<Transport> {
     shutdown: watch::Receiver<bool>,
 }
 
-impl<Transport> ClientTask<Transport>
+impl<Transport, Sender> ClientTask<Transport, Sender>
 where
     Transport: BleBridgeIo + Send + 'static,
+    Sender: TransportSenderEffects + Send + 'static,
 {
     async fn run(mut self) {
         loop {
@@ -163,12 +166,16 @@ where
         payload: &[u8],
     ) -> Option<Result<(), BleClientError>> {
         let route_id = self.route_cache.get(&to).copied()?;
+        let route = self.bridge.router_mut().active_route(&route_id).cloned()?;
         if self
             .bridge
             .router_mut()
             .forward_payload(&route_id, payload)
             .is_ok()
         {
+            if let Err(error) = self.queue_payload_on_route(&route, payload) {
+                return Some(Err(error));
+            }
             return Some(self.drive_bridge_round().await.map(|_| ()));
         }
         // Route is stale; evict it and signal that the slow path is needed.
@@ -188,12 +195,33 @@ where
         self.bridge
             .router_mut()
             .forward_payload(&route_id, payload)?;
+        self.queue_payload_on_route(&route, payload)?;
         self.route_cache.insert(to, route_id);
         self.drive_bridge_round().await?;
         if topology_changed {
             self.publish_topology();
         }
         Ok(())
+    }
+
+    fn queue_payload_on_route(
+        &mut self,
+        route: &MaterializedRoute,
+        payload: &[u8],
+    ) -> Result<(), BleClientError> {
+        let next_hop_node_id = selected_neighbor_from_backend_route_id(
+            &route.identity.admission.backend_ref.backend_route_id,
+        )
+        .ok_or_else(no_route_candidate)?;
+        let endpoint = self
+            .projector
+            .snapshot()
+            .edge(self.local_node_id, next_hop_node_id)
+            .map(|edge| edge.observation.value.endpoint.clone())
+            .ok_or_else(no_route_candidate)?;
+        self.transport_sender
+            .send_transport(&endpoint, payload)
+            .map_err(BleClientError::Transport)
     }
 
     async fn drive_bridge_round(&mut self) -> Result<BleBridgeProgress, BleClientError> {
@@ -473,13 +501,8 @@ impl JacquardBleClient {
         // from the caller's runtime and avoids Send requirements on the LocalSet-pinned futures.
         let runtime_thread = std::thread::spawn(move || {
             let effects = BleRuntimeEffects::new(topology.observed_at_tick);
-            let router = build_router(
-                local_node_id,
-                topology.clone(),
-                transport_sender,
-                effects.clone(),
-            )
-            .expect("build router");
+            let router = build_router(local_node_id, topology.clone(), effects.clone())
+                .expect("build router");
             let mut projector = TopologyProjector::new(local_node_id, topology);
             // Seed the projector with capabilities advertised by each engine so route shapes are
             // classified correctly from the first round.
@@ -500,6 +523,7 @@ impl JacquardBleClient {
             let task = ClientTask {
                 local_node_id,
                 bridge,
+                transport_sender,
                 commands: commands_rx,
                 incoming: incoming_task,
                 topology: topology_task_state,
@@ -563,25 +587,11 @@ fn duration_for_tick_hint(round_interval_ms: Duration, ticks: Tick) -> Duration 
         .unwrap_or(Duration::MAX)
 }
 
-fn build_router<Sender>(
+fn build_router(
     local_node_id: NodeId,
     topology: Observation<Configuration>,
-    transport: Sender,
     effects: BleRuntimeEffects,
-) -> Result<JacquardBleRouter, RouteError>
-where
-    Sender: TransportSenderEffects + Clone + Send + 'static,
-{
-    // Pathway handles structured multi-hop routing with deterministic topology modelling.
-    let pathway_engine = PathwayEngine::without_committee_selector(
-        local_node_id,
-        DeterministicPathwayTopologyModel::new(),
-        transport.clone(),
-        InMemoryRetentionStore::default(),
-        effects.clone(),
-        Blake3Hashing,
-    );
-
+) -> Result<JacquardBleRouter, RouteError> {
     let mut router = MultiEngineRouter::new(
         local_node_id,
         FixedPolicyEngine::new(default_profile()),
@@ -589,13 +599,7 @@ where
         topology.clone(),
         policy_inputs_for(&topology, local_node_id),
     );
-    router.register_engine(Box::new(pathway_engine))?;
-    // Batman provides opportunistic flooding-based fallback when Pathway has no explicit path.
-    router.register_engine(Box::new(BatmanBellmanEngine::new(
-        local_node_id,
-        transport,
-        effects,
-    )))?;
+    router.register_engine(Box::new(MercatorEngine::new(local_node_id)))?;
     Ok(router)
 }
 
@@ -612,7 +616,7 @@ fn initial_topology(local_node_id: NodeId, observed_at_tick: Tick) -> Observatio
             endpoint,
             observed_at_tick,
         ),
-        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+        &[MERCATOR_ENGINE_ID],
     )
     .build();
 
@@ -653,8 +657,8 @@ fn policy_inputs_for(
             origin_authentication: topology.origin_authentication,
             observed_at_tick: topology.observed_at_tick,
         },
-        // Two engines registered: Pathway + Batman.
-        routing_engine_count: 2,
+        // Mercator single-engine routing.
+        routing_engine_count: 1,
         // Conservative BLE estimates that bias the policy engine toward repair-tolerant routes.
         median_rtt_ms: DurationMs(40),
         loss_permille: RatioPermille(50),
@@ -674,7 +678,7 @@ fn default_profile() -> SelectedRoutingParameters {
         },
         deployment_profile: jacquard_core::OperatingMode::DenseInteractive,
         diversity_floor: jacquard_core::DiversityFloor(1),
-        routing_engine_fallback_policy: jacquard_core::RoutingEngineFallbackPolicy::Allowed,
+        routing_engine_fallback_policy: jacquard_core::RoutingEngineFallbackPolicy::Forbidden,
         route_replacement_policy: jacquard_core::RouteReplacementPolicy::Allowed,
     }
 }
@@ -688,12 +692,15 @@ fn default_objective(destination: NodeId) -> RoutingObjective {
         protection_floor: RouteProtectionClass::LinkProtected,
         target_connectivity: ConnectivityPosture {
             repair: RouteRepairClass::Repairable,
-            // PartitionTolerant allows the router to queue messages while waiting for reconnect.
-            partition: RoutePartitionClass::PartitionTolerant,
+            partition: RoutePartitionClass::ConnectedOnly,
         },
-        hold_fallback_policy: HoldFallbackPolicy::Allowed,
+        hold_fallback_policy: HoldFallbackPolicy::Forbidden,
         latency_budget_ms: Limit::Bounded(DurationMs(250)),
         protection_priority: PriorityPoints(10),
         connectivity_priority: PriorityPoints(20),
     }
+}
+
+fn no_route_candidate() -> BleClientError {
+    BleClientError::Route(RouteError::Selection(RouteSelectionError::NoCandidate))
 }

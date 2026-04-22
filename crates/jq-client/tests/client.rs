@@ -92,7 +92,7 @@ async fn send_flushes_a_payload_through_the_client_boundary() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn user_payloads_starting_with_jqbatman_are_delivered_while_unframed_control_bytes_stay_hidden()
+async fn user_payloads_starting_with_jqclient_are_delivered_while_unframed_control_bytes_stay_hidden()
  {
     LocalSet::new()
         .run_until(async {
@@ -118,7 +118,7 @@ async fn user_payloads_starting_with_jqbatman_are_delivered_while_unframed_contr
                     payload_received(
                         remote_node_id,
                         ble_endpoint(2, TransportKind::BleGatt),
-                        &encode_client_payload_for_testing(b"JQBATMAN user payload"),
+                        &encode_client_payload_for_testing(b"JQCLIENT user payload"),
                     ),
                 )
                 .expect("emit framed user payload");
@@ -128,7 +128,7 @@ async fn user_payloads_starting_with_jqbatman_are_delivered_while_unframed_contr
                 .expect("framed user payload should be delivered")
                 .expect("incoming payload");
             assert_eq!(delivered.0, remote_node_id);
-            assert_eq!(delivered.1.as_ref(), b"JQBATMAN user payload");
+            assert_eq!(delivered.1.as_ref(), b"JQCLIENT user payload");
 
             ingress_sender
                 .emit(
@@ -136,7 +136,7 @@ async fn user_payloads_starting_with_jqbatman_are_delivered_while_unframed_contr
                     payload_received(
                         remote_node_id,
                         ble_endpoint(2, TransportKind::BleGatt),
-                        b"JQBATMAN control plane",
+                        b"JQCONTROL plane",
                     ),
                 )
                 .expect("emit unframed control payload");

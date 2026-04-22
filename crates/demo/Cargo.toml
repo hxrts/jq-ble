@@ -19,10 +19,9 @@ thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["sync", "rt", "time"] }
 
 [dev-dependencies]
-jacquard-batman-bellman = { workspace = true }
 jacquard-core = { workspace = true }
 jacquard-host-support = { workspace = true }
 jacquard-mem-node-profile = { workspace = true }
-jacquard-pathway = { workspace = true }
+jacquard-mercator = { workspace = true }
 jacquard-traits = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }

@@ -18,6 +18,7 @@ use jacquard_core::{
 use jacquard_host_support::{
     DispatchReceiver, DispatchSender, TransportIngressNotifier, transport_ingress_mailbox,
 };
+use jacquard_mercator::MERCATOR_ENGINE_ID;
 use jacquard_testkit::topology;
 use jacquard_traits::{TransportSenderEffects, effect_handler};
 use jq_client::BleBridgeIo;
@@ -135,11 +136,11 @@ pub fn published_topology() -> Observation<Configuration> {
             nodes: BTreeMap::from([
                 (
                     NodeId([1; 32]),
-                    topology::node(1).pathway_and_batman_bellman().build(),
+                    topology::node(1).for_engine(&MERCATOR_ENGINE_ID).build(),
                 ),
                 (
                     NodeId([2; 32]),
-                    topology::node(2).pathway_and_batman_bellman().build(),
+                    topology::node(2).for_engine(&MERCATOR_ENGINE_ID).build(),
                 ),
             ]),
             links: BTreeMap::from([
@@ -178,7 +179,7 @@ pub fn local_only_topology(local_node_id: NodeId) -> Observation<Configuration> 
             epoch: RouteEpoch(1),
             nodes: BTreeMap::from([(
                 local_node_id,
-                topology::node(1).pathway_and_batman_bellman().build(),
+                topology::node(1).for_engine(&MERCATOR_ENGINE_ID).build(),
             )]),
             links: BTreeMap::new(),
             environment: Environment {

@@ -9,16 +9,15 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     Configuration, ControllerId, Environment, FactSourceClass, LinkBuilder, LinkEndpoint,
-    LinkRuntimeState, NodeId, Observation, OriginAuthenticationClass, PartitionRecoveryClass,
-    RatioPermille, RepairCapability, RouteEpoch, RoutingEvidenceClass, Tick, TransportIngressEvent,
-    TransportKind,
+    LinkRuntimeState, Node, NodeId, Observation, OriginAuthenticationClass, PartitionRecoveryClass,
+    RatioPermille, RepairCapability, RouteEpoch, RouteShapeVisibility, RoutingEngineId,
+    RoutingEvidenceClass, Tick, TransportIngressEvent, TransportKind,
 };
 use jacquard_host_support::{TransportIngressClass, dispatch_mailbox};
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
-use jacquard_pathway::PATHWAY_ENGINE_ID;
+use jacquard_mercator::MERCATOR_ENGINE_ID;
 use jq_client::JacquardBleClient;
 
 use common::{FakeTransport, TestTransportSender, ble_endpoint};
@@ -41,7 +40,7 @@ fn local_only_topology() -> Observation<Configuration> {
                         ble_endpoint(1, TransportKind::BleGatt),
                         Tick(1),
                     ),
-                    &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                    &[MERCATOR_ENGINE_ID],
                 )
                 .build(),
             )]),
@@ -74,7 +73,7 @@ fn published_topology() -> Observation<Configuration> {
                             ble_endpoint(1, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                        &[MERCATOR_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -86,7 +85,7 @@ fn published_topology() -> Observation<Configuration> {
                             ble_endpoint(2, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                        &[MERCATOR_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -149,7 +148,7 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                             ble_endpoint(1, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                        &[MERCATOR_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -161,7 +160,7 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                             ble_endpoint(2, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                        &[MERCATOR_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -173,7 +172,7 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                             ble_endpoint(3, TransportKind::BleL2cap),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                        &[MERCATOR_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -185,7 +184,7 @@ fn ambiguous_multi_path_topology() -> Observation<Configuration> {
                             ble_endpoint(4, TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                        &[MERCATOR_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -314,6 +313,22 @@ fn link_observed(
     }
 }
 
+fn advertised_engines(node: &Node) -> Vec<RoutingEngineId> {
+    let mut engines = node
+        .profile
+        .services
+        .iter()
+        .flat_map(|service| service.routing_engines.iter().cloned())
+        .collect::<Vec<_>>();
+    engines.sort();
+    engines.dedup();
+    engines
+}
+
+fn assert_node_advertises_only_mercator(node: &Node) {
+    assert_eq!(advertised_engines(node), vec![MERCATOR_ENGINE_ID]);
+}
+
 #[tokio::test]
 async fn topology_api_tracks_discovery_upgrade_and_disconnect_like_events() {
     let local_node_id = NodeId([1; 32]);
@@ -339,6 +354,7 @@ async fn topology_api_tracks_discovery_upgrade_and_disconnect_like_events() {
         .expect("initial topology tick")
         .expect("initial topology");
     assert_eq!(initial.nodes.len(), 1);
+    assert_node_advertises_only_mercator(&initial.nodes[&local_node_id].node);
 
     ingress_sender
         .emit(
@@ -356,6 +372,7 @@ async fn topology_api_tracks_discovery_upgrade_and_disconnect_like_events() {
         .expect("gatt topology update")
         .expect("gatt snapshot");
     assert!(gatt_snapshot.node(&remote_node_id).is_some());
+    assert_node_advertises_only_mercator(&gatt_snapshot.nodes[&remote_node_id].node);
     assert_eq!(
         gatt_snapshot
             .edge(local_node_id, remote_node_id)
@@ -454,6 +471,11 @@ async fn topology_snapshot_surfaces_active_route_after_send() {
         .next()
         .expect("active route present");
     assert_eq!(active_route.terminal_node_id, remote_node_id);
+    assert_eq!(active_route.engine, MERCATOR_ENGINE_ID);
+    assert_eq!(
+        active_route.shape_visibility,
+        RouteShapeVisibility::CorridorEnvelope
+    );
     assert_eq!(active_route.protocol_mix, vec![TransportKind::BleGatt]);
     assert!(matches!(
         active_route.delivery,
@@ -495,6 +517,11 @@ async fn topology_snapshot_does_not_overclaim_an_ambiguous_multi_hop_route() {
         .next()
         .expect("active route present");
     assert_eq!(active_route.terminal_node_id, remote_node_id);
+    assert_eq!(active_route.engine, MERCATOR_ENGINE_ID);
+    assert_eq!(
+        active_route.shape_visibility,
+        RouteShapeVisibility::CorridorEnvelope
+    );
     assert!(matches!(
         active_route.delivery,
         jq_node_profile::ActiveRouteDelivery::Reachable { hop_count_hint }

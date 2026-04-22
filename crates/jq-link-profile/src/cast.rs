@@ -70,6 +70,9 @@ pub fn link_observation_from_ble_event(
         CastDeliveryPolicy::default(),
     )
     .expect("default BLE cast policy accepts resolved GATT and L2CAP endpoints");
+    // Keep BLE cast support as ordinary topology input. Mercator consumes the
+    // resulting link observation through the router rather than receiving
+    // engine-private evidence from the async BLE owner.
     let link = link_from_unicast_delivery_support(endpoint, support, observed_at_tick);
     TransportObservation::LinkObserved {
         remote_node_id,

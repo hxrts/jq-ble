@@ -1,11 +1,8 @@
-//! In Jacquard, knowing a destination node ID is sufficient to reach it even
-//! when every intermediate hop is a stranger that neither endpoint configured
-//! or acknowledged.
+//! In Jacquard, the host can keep relay routing behind a service boundary even
+//! when intermediate hops are not exposed to endpoint applications.
 //!
-//! In this e2e test the Batman router must learn the relay graph from each
-//! node's own direct-neighbor observations alone. No node starts with the full
-//! line graph or a preinstalled relay path. Out-of-band QR introduction is not
-//! required.
+//! In this e2e test the Mercator router plans over an explicit connected
+//! corridor while the service surface still shows only locally verified peers.
 //!
 //! Tests run against `JacquardBleHostState` and `JacquardBleService` through a
 //! fully injected fake transport. The harness models a BLE adjacency graph and
@@ -20,7 +17,6 @@ use std::time::Duration;
 
 use demo::{JacquardBleEvent, JacquardBleHostState, JacquardBleService, JacquardBleServiceError};
 use futures_util::{FutureExt, Stream, StreamExt};
-use jacquard_batman_bellman::BATMAN_BELLMAN_ENGINE_ID;
 use jacquard_core::{
     ByteCount, Configuration, ControllerId, Environment, FactSourceClass, LinkBuilder,
     LinkEndpoint, LinkRuntimeState, NodeId, Observation, OriginAuthenticationClass,
@@ -33,7 +29,7 @@ use jacquard_host_support::{
     dispatch_mailbox, transport_ingress_mailbox,
 };
 use jacquard_mem_node_profile::{NodeIdentity, NodePreset, NodePresetOptions};
-use jacquard_pathway::PATHWAY_ENGINE_ID;
+use jacquard_mercator::MERCATOR_ENGINE_ID;
 use jacquard_traits::{TransportSenderEffects, effect_handler};
 use jq_client::{
     BleBridgeIo, BleClientError, JacquardBleClient, decode_client_payload_for_testing,
@@ -441,7 +437,7 @@ fn local_only_topology(local_node_id: NodeId) -> Observation<Configuration> {
                         ble_endpoint(node_byte(local_node_id), TransportKind::BleGatt),
                         Tick(1),
                     ),
-                    &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                    &[MERCATOR_ENGINE_ID],
                 )
                 .build(),
             )]),
@@ -461,23 +457,12 @@ fn local_only_topology(local_node_id: NodeId) -> Observation<Configuration> {
 
 fn five_node_line_topology(local_node_id: NodeId) -> Observation<Configuration> {
     let roster = [node_id(1), node_id(2), node_id(3), node_id(4), node_id(5)];
-    let direct_neighbors = match node_byte(local_node_id) {
-        1 => vec![(node_id(2), TransportKind::BleGatt)],
-        2 => vec![
-            (node_id(1), TransportKind::BleGatt),
-            (node_id(3), TransportKind::BleL2cap),
-        ],
-        3 => vec![
-            (node_id(2), TransportKind::BleL2cap),
-            (node_id(4), TransportKind::BleGatt),
-        ],
-        4 => vec![
-            (node_id(3), TransportKind::BleGatt),
-            (node_id(5), TransportKind::BleL2cap),
-        ],
-        5 => vec![(node_id(4), TransportKind::BleL2cap)],
-        _ => Vec::new(),
-    };
+    let line_links = [
+        (node_id(1), node_id(2), TransportKind::BleGatt),
+        (node_id(2), node_id(3), TransportKind::BleL2cap),
+        (node_id(3), node_id(4), TransportKind::BleGatt),
+        (node_id(4), node_id(5), TransportKind::BleL2cap),
+    ];
 
     Observation {
         value: Configuration {
@@ -486,17 +471,17 @@ fn five_node_line_topology(local_node_id: NodeId) -> Observation<Configuration> 
                 .into_iter()
                 .map(|id| (id, route_capable_node(id)))
                 .collect(),
-            links: direct_neighbors
+            links: line_links
                 .into_iter()
-                .map(|(neighbor_node_id, transport_kind)| {
-                    (
-                        (local_node_id, neighbor_node_id),
-                        active_link(neighbor_node_id, transport_kind),
-                    )
+                .flat_map(|(left, right, transport_kind)| {
+                    [
+                        ((left, right), active_link(right, transport_kind.clone())),
+                        ((right, left), active_link(left, transport_kind)),
+                    ]
                 })
                 .collect(),
             environment: Environment {
-                reachable_neighbor_count: 1,
+                reachable_neighbor_count: direct_neighbor_count(local_node_id),
                 churn_permille: RatioPermille(0),
                 contention_permille: RatioPermille(0),
             },
@@ -508,6 +493,14 @@ fn five_node_line_topology(local_node_id: NodeId) -> Observation<Configuration> 
     }
 }
 
+fn direct_neighbor_count(local_node_id: NodeId) -> u32 {
+    match node_byte(local_node_id) {
+        1 | 5 => 1,
+        2..=4 => 2,
+        _ => 0,
+    }
+}
+
 fn route_capable_node(id: NodeId) -> jacquard_core::Node {
     NodePreset::route_capable_for_engines(
         NodePresetOptions::new(
@@ -515,7 +508,7 @@ fn route_capable_node(id: NodeId) -> jacquard_core::Node {
             ble_endpoint(node_byte(id), TransportKind::BleGatt),
             Tick(1),
         ),
-        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+        &[MERCATOR_ENGINE_ID],
     )
     .build()
 }
@@ -550,7 +543,7 @@ fn direct_peer_topology(
                             ble_endpoint(node_byte(local_node_id), TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                        &[MERCATOR_ENGINE_ID],
                     )
                     .build(),
                 ),
@@ -562,7 +555,7 @@ fn direct_peer_topology(
                             ble_endpoint(node_byte(remote_node_id), TransportKind::BleGatt),
                             Tick(1),
                         ),
-                        &[PATHWAY_ENGINE_ID, BATMAN_BELLMAN_ENGINE_ID],
+                        &[MERCATOR_ENGINE_ID],
                     )
                     .build(),
                 ),
