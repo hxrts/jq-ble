@@ -18,8 +18,8 @@ use jacquard_core::{
 use jacquard_host_support::DispatchReceiver;
 use jacquard_traits::{TransportDriver, TransportSenderEffects};
 use jq_link_profile::{
-    BleConfig, BleOutboundCommand, BleRuntimeTask, BleSession, BleTransportDriver,
-    JACQUARD_C2P_CHAR_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
+    BleConfig, BleNotifySubscriber, BleOutboundCommand, BleRuntimeTask, BleSession,
+    BleTransportDriver, JACQUARD_C2P_CHAR_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
     JACQUARD_PSM_CHAR_UUID, PeerSessions, advertised_hint_service, gatt_endpoint,
     gatt_fallback_service, gatt_l2cap_service, identity_gatt_service, l2cap_endpoint,
     parse_psm_value,
@@ -345,6 +345,70 @@ async fn sender_queue_fails_closed_when_dispatch_mailbox_is_full() {
 }
 
 #[tokio::test]
+async fn subscribed_peripheral_notify_state_is_not_unicast_egress() {
+    let local_node_id = NodeId([1; 32]);
+    let remote_node_id = NodeId([6; 32]);
+    let device_id = DeviceId::from("mock-central");
+
+    let (central_link, _remote_peripheral_link) = MockLink::pair();
+    let runtime_central: Central<_> = Central::from_backend(central_link.central);
+    let (remote_central_link, peripheral_link) = MockLink::pair();
+    let remote_central: Central<_> = Central::from_backend(remote_central_link.central);
+    let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+
+    let (mut task, (_driver, _sender, _outbound, control, _notifier)) = BleRuntimeTask::new(
+        local_node_id,
+        runtime_central,
+        runtime_peripheral,
+        BleConfig::default(),
+    )
+    .expect("build runtime");
+    task.testing_seed_resolved_peer(device_id.clone(), remote_node_id);
+    task.testing_seed_sessions(
+        remote_node_id,
+        PeerSessions::gatt_notify_fanout(BleNotifySubscriber {
+            device_id: device_id.clone(),
+        }),
+    );
+    assert!(
+        !task.testing_has_egress_session_for_device(&device_id),
+        "subscription fanout must not satisfy unicast egress"
+    );
+
+    let runtime_task = tokio::spawn(task.testing_run());
+    let mut remote_events = remote_central.events();
+    remote_central
+        .subscribe_characteristic(&DeviceId::from("mock-peripheral"), JACQUARD_P2C_CHAR_UUID)
+        .await
+        .expect("subscribe to runtime notifications");
+
+    control
+        .dispatch(vec![BleOutboundCommand {
+            endpoint: gatt_endpoint(&device_id),
+            payload: b"must-not-fanout".to_vec(),
+        }])
+        .await
+        .expect("dispatch outbound batch");
+
+    let deadline = tokio::time::sleep(Duration::from_millis(100));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => break,
+            event = remote_events.next() => match event {
+                Some(CentralEvent::CharacteristicNotification { .. }) => {
+                    panic!("node-targeted unicast must not use untargeted notify fanout");
+                }
+                Some(_) => {}
+                None => break,
+            },
+        }
+    }
+
+    shutdown_runtime(control, runtime_task).await;
+}
+
+#[tokio::test]
 async fn peripheral_side_node_id_reads_respond_with_local_identity() {
     let local_node_id = NodeId([4; 32]);
 
@@ -574,7 +638,7 @@ async fn central_opened_l2cap_upgrade_emits_updates_and_carries_framed_payloads(
 }
 
 #[tokio::test]
-async fn accepted_l2cap_channels_register_and_downgrade_to_gatt_on_close() {
+async fn accepted_l2cap_channels_register_and_close_without_fake_gatt_downgrade() {
     let local_node_id = NodeId([4; 32]);
     let remote_node_id = NodeId([7; 32]);
 
@@ -594,7 +658,7 @@ async fn accepted_l2cap_channels_register_and_downgrade_to_gatt_on_close() {
     task.testing_seed_resolved_peer(DeviceId::from("mock-central"), remote_node_id);
     task.testing_seed_sessions(
         remote_node_id,
-        PeerSessions::gatt_only(BleSession::GattPeripheralSubscribed {
+        PeerSessions::gatt_notify_fanout(BleNotifySubscriber {
             device_id: DeviceId::from("mock-central"),
         }),
     );
@@ -646,8 +710,12 @@ async fn accepted_l2cap_channels_register_and_downgrade_to_gatt_on_close() {
     drop(remote_writer);
     drop(remote_reader);
 
-    let downgrade = wait_for_link_kinds(&mut driver, 1).await;
-    assert_eq!(downgrade, vec![TransportKind::BleGatt]);
+    sleep(Duration::from_millis(50)).await;
+    let downgrade = driver.drain_transport_ingress().expect("drain ingress");
+    assert!(
+        downgrade.is_empty(),
+        "subscriber fanout must not be reported as a unicast GATT downgrade"
+    );
 
     shutdown_runtime(control, runtime_task).await;
 }

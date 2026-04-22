@@ -39,9 +39,9 @@ use crate::session::{
     session_references_device,
 };
 use crate::transport::{
-    BleChannelId, BleConfig, BleDriverCommand, BleDriverControl, BleLinkError, BleOutboundCommand,
-    BlePeerKey, BleRuntimeParts, BleSession, BleTransportComponents, BleTransportDriver,
-    BleTransportSender, DiscoveredPeerHint, PeerSessions,
+    BleChannelId, BleConfig, BleDriverCommand, BleDriverControl, BleLinkError, BleNotifySubscriber,
+    BleOutboundCommand, BlePeerKey, BleRuntimeParts, BleSession, BleTransportComponents,
+    BleTransportDriver, BleTransportSender, DiscoveredPeerHint, PeerSessions,
 };
 
 // Short sleep between deferred control ingress retries; keeps the select loop responsive without busy-looping.
@@ -194,6 +194,7 @@ where
         }
 
         // Advertise either the full L2CAP service or the GATT-only fallback depending on platform support.
+        // Advertising carries discovery/capability hints only; routed payloads stay on GATT writes or L2CAP.
         let service = self.local_psm.map_or_else(
             || gatt_fallback_service(&self.local_node_id),
             |psm| gatt_l2cap_service(&self.local_node_id, psm),
@@ -433,13 +434,13 @@ where
 
     fn handle_p2c_subscription(&mut self, client_id: DeviceId) {
         if let Some(node_id) = self.resolved_node_id_for_device(&client_id) {
-            let session = BleSession::GattPeripheralSubscribed {
+            let subscriber = BleNotifySubscriber {
                 device_id: client_id.clone(),
             };
             self.sessions
                 .entry(node_id)
-                .and_modify(|sessions| sessions.install_gatt_subscription(session.clone()))
-                .or_insert_with(|| PeerSessions::gatt_only(session));
+                .and_modify(|sessions| sessions.install_gatt_subscription(subscriber.clone()))
+                .or_insert_with(|| PeerSessions::gatt_notify_fanout(subscriber));
         }
     }
 
@@ -539,15 +540,6 @@ where
                         payload.to_vec(),
                         WriteType::WithoutResponse,
                     )
-                    .await;
-                None
-            }
-            BleSession::GattPeripheralSubscribed { .. } => {
-                // Fire-and-forget; notify errors are transient and handled by the reliable layer.
-                // allow-ignored-result: peripheral notifications are fire-and-forget and transient failure is retried later
-                let _ = self
-                    .peripheral
-                    .notify_characteristic(JACQUARD_P2C_CHAR_UUID, payload.to_vec())
                     .await;
                 None
             }

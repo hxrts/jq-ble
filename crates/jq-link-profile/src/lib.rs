@@ -26,7 +26,7 @@ pub use gatt::{
 };
 pub use task::BleRuntimeTask;
 pub use transport::{
-    BleConfig, BleDriverCommand, BleDriverControl, BleLinkError, BleOutboundCommand, BleSession,
-    BleTransportComponents, BleTransportDriver, BleTransportSender, DiscoveredPeerHint,
-    PeerSessions,
+    BleConfig, BleDriverCommand, BleDriverControl, BleLinkError, BleNotifySubscriber,
+    BleOutboundCommand, BleSession, BleTransportComponents, BleTransportDriver, BleTransportSender,
+    DiscoveredPeerHint, PeerSessions,
 };
