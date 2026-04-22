@@ -19,17 +19,3 @@ jacquard-reference-client = "0.8.0"
 jacquard-router = "0.8.0"
 jacquard-testkit = "0.8.0"
 jacquard-traits = "0.8.0"
-
-# Temporary release-candidate unblocker: remove this block once Jacquard 0.8.0
-# with cast delivery helpers is published and task 11 in work/cast_changes.md is complete.
-[patch.crates-io]
-jacquard-cast-support = { path = "../jacquard/crates/cast-support" }
-jacquard-core = { path = "../jacquard/crates/core" }
-jacquard-host-support = { path = "../jacquard/crates/host-support" }
-jacquard-mem-link-profile = { path = "../jacquard/crates/mem-link-profile" }
-jacquard-mem-node-profile = { path = "../jacquard/crates/mem-node-profile" }
-jacquard-mercator = { path = "../jacquard/crates/mercator" }
-jacquard-reference-client = { path = "../jacquard/crates/reference-client" }
-jacquard-router = { path = "../jacquard/crates/router" }
-jacquard-testkit = { path = "../jacquard/crates/testkit" }
-jacquard-traits = { path = "../jacquard/crates/traits" }
