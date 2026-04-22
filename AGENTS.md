@@ -31,6 +31,8 @@ The main job of this repo is to bridge those two worlds cleanly:
 - Jacquard time and round cadence are owned by the host bridge, not by the BLE runtime.
 - BLE advertisement hints are not full identity. Full remote identity must be resolved before emitting Jacquard link observations.
 - The synchronous sender side only queues outbound commands. Actual BLE I/O is performed later by the async runtime owner.
+- GATT notifications are multicast/fanout, not targeted unicast. Use L2CAP or central GATT writes for node-targeted sends.
+- BLE advertising is discovery/control-plane only; routed payloads must not use advertising.
 
 ## External BLE Dependency
 

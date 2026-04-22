@@ -8,7 +8,7 @@
 use blew::central::Central;
 use blew::peripheral::Peripheral;
 use blew::types::DeviceId;
-use jacquard_core::{LinkEndpoint, NodeId, TransportError};
+use jacquard_core::{LinkEndpoint, NodeId, TransportDeliveryIntent, TransportError};
 use jacquard_host_support::{
     DispatchReceiver, DispatchSender, TransportIngressNotifier, TransportIngressReceiver,
 };
@@ -299,8 +299,15 @@ fn push_unique_endpoint(endpoints: &mut Vec<LinkEndpoint>, endpoint: LinkEndpoin
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BleOutboundCommand {
-    pub endpoint: LinkEndpoint,
+    pub intent: TransportDeliveryIntent,
     pub payload: Vec<u8>,
+}
+
+impl BleOutboundCommand {
+    #[must_use]
+    pub fn endpoint(&self) -> &LinkEndpoint {
+        self.intent.endpoint()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,10 +335,18 @@ impl TransportSenderEffects for BleTransportSender {
         endpoint: &LinkEndpoint,
         payload: &[u8],
     ) -> Result<(), TransportError> {
+        self.send_transport_to(&TransportDeliveryIntent::unicast(endpoint.clone()), payload)
+    }
+
+    fn send_transport_to(
+        &mut self,
+        intent: &TransportDeliveryIntent,
+        payload: &[u8],
+    ) -> Result<(), TransportError> {
         // Enqueue to the dispatch mailbox; the runtime task drains this after each router round.
         self.outbound
             .send(BleOutboundCommand {
-                endpoint: endpoint.clone(),
+                intent: intent.clone(),
                 payload: payload.to_vec(),
             })
             .map(|_| ())

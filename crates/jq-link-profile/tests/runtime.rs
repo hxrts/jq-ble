@@ -12,8 +12,9 @@ use blew::types::DeviceId;
 use bytes::Bytes;
 use futures_util::SinkExt;
 use jacquard_core::{
-    ByteCount, EndpointLocator, LinkEndpoint, LinkRuntimeState, NodeId, TransportError,
-    TransportIngressEvent, TransportKind,
+    ByteCount, EndpointLocator, LinkEndpoint, LinkRuntimeState, MulticastGroupId, NodeId,
+    TransportDeliveryIntent, TransportDeliveryMode, TransportError, TransportIngressEvent,
+    TransportKind,
 };
 use jacquard_host_support::DispatchReceiver;
 use jacquard_traits::{TransportDriver, TransportSenderEffects};
@@ -21,8 +22,8 @@ use jq_link_profile::{
     BleConfig, BleNotifySubscriber, BleOutboundCommand, BleRuntimeTask, BleSession,
     BleTransportDriver, JACQUARD_C2P_CHAR_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
     JACQUARD_PSM_CHAR_UUID, PeerSessions, advertised_hint_service, gatt_endpoint,
-    gatt_fallback_service, gatt_l2cap_service, identity_gatt_service, l2cap_endpoint,
-    parse_psm_value,
+    gatt_fallback_service, gatt_l2cap_service, gatt_notify_fanout_endpoint, identity_gatt_service,
+    l2cap_endpoint, parse_psm_value,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinHandle;
@@ -149,7 +150,7 @@ async fn runtime_task_owns_ble_roles_while_components_expose_bridge_surfaces() {
 
     control
         .dispatch(vec![BleOutboundCommand {
-            endpoint: endpoint(7),
+            intent: TransportDeliveryIntent::unicast(endpoint(7)),
             payload: b"queued".to_vec(),
         }])
         .await
@@ -286,6 +287,7 @@ async fn sender_queue_does_not_perform_ble_io_until_control_dispatch() {
 
     let batch = outbound.drain();
     assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0].intent.mode(), TransportDeliveryMode::Unicast);
     control
         .dispatch(batch)
         .await
@@ -384,7 +386,7 @@ async fn subscribed_peripheral_notify_state_is_not_unicast_egress() {
 
     control
         .dispatch(vec![BleOutboundCommand {
-            endpoint: gatt_endpoint(&device_id),
+            intent: TransportDeliveryIntent::unicast(gatt_endpoint(&device_id)),
             payload: b"must-not-fanout".to_vec(),
         }])
         .await
@@ -401,6 +403,63 @@ async fn subscribed_peripheral_notify_state_is_not_unicast_egress() {
                 }
                 Some(_) => {}
                 None => break,
+            },
+        }
+    }
+
+    shutdown_runtime(control, runtime_task).await;
+}
+
+#[tokio::test]
+async fn multicast_intent_dispatches_gatt_notify_fanout() {
+    let local_node_id = NodeId([1; 32]);
+    let receivers = vec![NodeId([6; 32]), NodeId([7; 32])];
+
+    let (central_link, _remote_peripheral_link) = MockLink::pair();
+    let runtime_central: Central<_> = Central::from_backend(central_link.central);
+    let (remote_central_link, peripheral_link) = MockLink::pair();
+    let remote_central: Central<_> = Central::from_backend(remote_central_link.central);
+    let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+
+    let components = BleRuntimeTask::spawn(
+        local_node_id,
+        runtime_central,
+        runtime_peripheral,
+        BleConfig::default(),
+    )
+    .expect("spawn runtime");
+    let (_driver, _sender, _outbound, control, _notifier, runtime_task) = components.into_parts();
+    let mut remote_events = remote_central.events();
+    remote_central
+        .subscribe_characteristic(&DeviceId::from("mock-peripheral"), JACQUARD_P2C_CHAR_UUID)
+        .await
+        .expect("subscribe to runtime notifications");
+
+    control
+        .dispatch(vec![BleOutboundCommand {
+            intent: TransportDeliveryIntent::Multicast {
+                endpoint: gatt_notify_fanout_endpoint(),
+                group_id: MulticastGroupId([4; 16]),
+                receivers,
+            },
+            payload: b"fanout".to_vec(),
+        }])
+        .await
+        .expect("dispatch outbound batch");
+
+    let deadline = tokio::time::sleep(Duration::from_millis(100));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => panic!("timed out waiting for multicast notification"),
+            event = remote_events.next() => match event {
+                Some(CentralEvent::CharacteristicNotification { char_uuid, value, .. }) => {
+                    assert_eq!(char_uuid, JACQUARD_P2C_CHAR_UUID);
+                    assert_eq!(value, Bytes::from_static(b"fanout"));
+                    break;
+                }
+                Some(_) => {}
+                None => panic!("remote events closed before multicast notification"),
             },
         }
     }

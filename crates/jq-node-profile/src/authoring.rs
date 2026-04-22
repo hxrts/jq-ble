@@ -8,7 +8,8 @@
 use std::collections::BTreeMap;
 
 use jacquard_core::{
-    DestinationId, NodeId, RouteId, RouteShapeVisibility, RoutingEngineId, Tick, TransportKind,
+    DestinationId, NodeId, RouteId, RouteShapeVisibility, RoutingEngineId, Tick,
+    TransportDeliveryMode, TransportKind,
 };
 
 use crate::topology::{
@@ -48,6 +49,7 @@ pub struct ActiveRouteBuilder {
     engine: RoutingEngineId,
     shape_visibility: RouteShapeVisibility,
     protocol_mix: Vec<TransportKind>,
+    delivery_mode: TransportDeliveryMode,
     delivery: ActiveRouteDelivery,
     observed_at_tick: Tick,
 }
@@ -80,6 +82,7 @@ impl ActiveRouteBuilder {
             // ExplicitPath is the default so validation checks edges and protocol_mix by default.
             shape_visibility: RouteShapeVisibility::ExplicitPath,
             protocol_mix: Vec::new(),
+            delivery_mode: TransportDeliveryMode::Unicast,
             delivery,
             observed_at_tick,
         }
@@ -114,6 +117,12 @@ impl ActiveRouteBuilder {
     }
 
     #[must_use]
+    pub fn with_delivery_mode(mut self, delivery_mode: TransportDeliveryMode) -> Self {
+        self.delivery_mode = delivery_mode;
+        self
+    }
+
+    #[must_use]
     pub fn with_shape_visibility(mut self, shape_visibility: RouteShapeVisibility) -> Self {
         self.shape_visibility = shape_visibility;
         self
@@ -129,6 +138,7 @@ impl ActiveRouteBuilder {
             engine: self.engine,
             shape_visibility: self.shape_visibility,
             protocol_mix: self.protocol_mix,
+            delivery_mode: self.delivery_mode,
             delivery: self.delivery,
             observed_at_tick: self.observed_at_tick,
         }

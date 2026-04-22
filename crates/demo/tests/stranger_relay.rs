@@ -21,8 +21,8 @@ use jacquard_core::{
     ByteCount, Configuration, ControllerId, Environment, FactSourceClass, LinkBuilder,
     LinkEndpoint, LinkRuntimeState, NodeId, Observation, OriginAuthenticationClass,
     PartitionRecoveryClass, RatioPermille, RepairCapability, RouteEpoch, RouteError,
-    RouteSelectionError, RoutingEvidenceClass, Tick, TransportError, TransportIngressEvent,
-    TransportKind,
+    RouteSelectionError, RoutingEvidenceClass, Tick, TransportDeliveryIntent, TransportError,
+    TransportIngressEvent, TransportKind,
 };
 use jacquard_host_support::{
     DispatchReceiver, DispatchSender, TransportIngressClass, TransportIngressNotifier,
@@ -59,7 +59,7 @@ const QUIET_ROUNDS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OutboundFrame {
-    endpoint: LinkEndpoint,
+    intent: TransportDeliveryIntent,
     payload: Vec<u8>,
 }
 
@@ -83,9 +83,17 @@ impl TransportSenderEffects for TestTransportSender {
         endpoint: &LinkEndpoint,
         payload: &[u8],
     ) -> Result<(), TransportError> {
+        self.send_transport_to(&TransportDeliveryIntent::unicast(endpoint.clone()), payload)
+    }
+
+    fn send_transport_to(
+        &mut self,
+        intent: &TransportDeliveryIntent,
+        payload: &[u8],
+    ) -> Result<(), TransportError> {
         self.outbound
             .send(OutboundFrame {
-                endpoint: endpoint.clone(),
+                intent: intent.clone(),
                 payload: payload.to_vec(),
             })
             .map(|_| ())
@@ -306,7 +314,7 @@ impl RelayHarness {
         for node in self.nodes.values() {
             let flushed = node.drain_flushed();
             for frame in flushed {
-                let Some(target_node_id) = endpoint_node_id(&frame.endpoint) else {
+                let Some(target_node_id) = endpoint_node_id(frame.intent.endpoint()) else {
                     continue;
                 };
                 let Some(link) = self.links.get(&pair_key(node.node_id, target_node_id)) else {

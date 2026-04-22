@@ -19,3 +19,15 @@ jacquard-reference-client = "0.7.1"
 jacquard-router = "0.7.1"
 jacquard-testkit = "0.7.1"
 jacquard-traits = "0.7.1"
+
+[patch.crates-io]
+jacquard-cast-support = { path = "../jacquard/crates/cast-support" }
+jacquard-core = { path = "../jacquard/crates/core" }
+jacquard-host-support = { path = "../jacquard/crates/host-support" }
+jacquard-mem-link-profile = { path = "../jacquard/crates/mem-link-profile" }
+jacquard-mem-node-profile = { path = "../jacquard/crates/mem-node-profile" }
+jacquard-mercator = { path = "../jacquard/crates/mercator" }
+jacquard-reference-client = { path = "../jacquard/crates/reference-client" }
+jacquard-router = { path = "../jacquard/crates/router" }
+jacquard-testkit = { path = "../jacquard/crates/testkit" }
+jacquard-traits = { path = "../jacquard/crates/traits" }

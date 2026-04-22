@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use jacquard_core::{
     DestinationId, Link, Node, NodeId, Observation, RouteId, RouteShapeVisibility, RoutingEngineId,
-    Tick, TransportKind,
+    Tick, TransportDeliveryMode, TransportKind,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -102,6 +102,7 @@ pub struct ActiveRoute {
     pub shape_visibility: RouteShapeVisibility,
     // Deduplicated list of transport kinds used across all hops of the route.
     pub protocol_mix: Vec<TransportKind>,
+    pub delivery_mode: TransportDeliveryMode,
     pub delivery: ActiveRouteDelivery,
     pub observed_at_tick: Tick,
 }

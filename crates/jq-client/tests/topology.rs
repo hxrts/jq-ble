@@ -498,6 +498,10 @@ async fn topology_snapshot_surfaces_active_route_after_send() {
     assert_eq!(active_route.terminal_node_id, remote_node_id);
     assert_eq!(active_route.engine, MERCATOR_ENGINE_ID);
     assert_eq!(
+        active_route.delivery_mode,
+        jacquard_core::TransportDeliveryMode::Unicast
+    );
+    assert_eq!(
         active_route.shape_visibility,
         RouteShapeVisibility::CorridorEnvelope
     );

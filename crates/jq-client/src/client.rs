@@ -2,8 +2,8 @@
 //!
 //! [`JacquardBleClient`] wires together the BLE transport, Jacquard router
 //! (Mercator), host bridge, and topology projector. It spawns a
-//! dedicated single-threaded runtime and exposes `send`, `incoming`, and
-//! `topology_stream` to the application.
+//! dedicated single-threaded runtime and exposes `send`, `send_multicast`,
+//! `incoming`, and `topology_stream` to the application.
 //!
 //! Router and bridge construction helpers (`build_router`, `initial_topology`,
 //! `policy_inputs_for`, `default_profile`, `default_objective`) are kept
@@ -18,12 +18,17 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use jacquard_core::{
-    Configuration, LinkEndpoint, MaterializedRoute, NodeId, Observation, RouteError, RouteId,
-    RouteSelectionError, RoutingTickHint, Tick, TransportError, TransportObservation,
+    Configuration, DeliveryCompatibilityPolicy, LinkEndpoint, MaterializedRoute, MulticastGroupId,
+    NodeId, Observation, RouteAdmissionRejection, RouteDeliveryObjective, RouteError, RouteId,
+    RouteSelectionError, RoutingTickHint, Tick, TransportDeliveryIntent, TransportDeliveryMode,
+    TransportDeliverySupport, TransportError, TransportObservation,
 };
 use jacquard_mercator::selected_neighbor_from_backend_route_id;
+use jacquard_router::admitted_delivery_intent;
 use jacquard_traits::{Router, RoutingDataPlane, TransportSenderEffects};
-use jq_link_profile::{BleConfig, BleLinkError, BleTransportComponents};
+use jq_link_profile::{
+    BleConfig, BleLinkError, BleTransportComponents, gatt_notify_fanout_endpoint,
+};
 use jq_node_profile::MeshTopology;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -55,6 +60,16 @@ pub struct JacquardBleSendReceipt {
     pub destination_node_id: NodeId,
     pub route_id: RouteId,
     pub next_hop_node_id: NodeId,
+    pub delivery_mode: TransportDeliveryMode,
+    pub endpoint: LinkEndpoint,
+    pub stage: JacquardBleSendStage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JacquardBleMulticastReceipt {
+    pub group_id: MulticastGroupId,
+    pub receivers: Vec<NodeId>,
+    pub delivery_mode: TransportDeliveryMode,
     pub endpoint: LinkEndpoint,
     pub stage: JacquardBleSendStage,
 }
@@ -69,6 +84,8 @@ pub enum BleClientError {
     Bridge(#[from] BleBridgeError),
     #[error(transparent)]
     Transport(#[from] TransportError),
+    #[error(transparent)]
+    DeliveryAdmission(#[from] RouteAdmissionRejection),
     #[error("failed to start jacquard ble client runtime")]
     RuntimeStart(#[from] io::Error),
     #[error("jacquard ble client runtime is no longer running")]
@@ -83,11 +100,17 @@ enum ClientCommand {
         payload: Vec<u8>,
         reply: oneshot::Sender<Result<JacquardBleSendReceipt, BleClientError>>,
     },
+    SendMulticast {
+        group_id: MulticastGroupId,
+        receivers: Vec<NodeId>,
+        payload: Vec<u8>,
+        reply: oneshot::Sender<Result<JacquardBleMulticastReceipt, BleClientError>>,
+    },
 }
 
 struct QueuedTransportCommand {
     next_hop_node_id: NodeId,
-    endpoint: LinkEndpoint,
+    intent: TransportDeliveryIntent,
 }
 
 struct ClientTask<Transport, Sender> {
@@ -159,6 +182,19 @@ where
                 // allow-ignored-result: reply delivery is best-effort when the caller dropped the oneshot receiver
                 let _ = reply.send(result);
             }
+            ClientCommand::SendMulticast {
+                group_id,
+                receivers,
+                payload,
+                reply,
+            } => {
+                let result = self
+                    .handle_send_multicast(group_id, receivers, &payload)
+                    .await;
+                // Caller may have been dropped (fire-and-forget); a closed oneshot is not an error.
+                // allow-ignored-result: reply delivery is best-effort when the caller dropped the oneshot receiver
+                let _ = reply.send(result);
+            }
         }
     }
 
@@ -171,6 +207,34 @@ where
             return result;
         }
         self.activate_and_forward(to, &payload).await
+    }
+
+    async fn handle_send_multicast(
+        &mut self,
+        group_id: MulticastGroupId,
+        receivers: Vec<NodeId>,
+        payload: &[u8],
+    ) -> Result<JacquardBleMulticastReceipt, BleClientError> {
+        let endpoint = gatt_notify_fanout_endpoint();
+        let objective = RouteDeliveryObjective::MulticastGroup {
+            group_id,
+            receivers: receivers.clone(),
+        };
+        let support = TransportDeliverySupport::Multicast {
+            endpoint,
+            group_id,
+            receivers: receivers.clone(),
+        };
+        let intent = admitted_delivery_intent(
+            &objective,
+            &support,
+            DeliveryCompatibilityPolicy::ExactDeliveryOnly,
+        )?;
+        self.transport_sender
+            .send_transport_to(&intent, payload)
+            .map_err(BleClientError::Transport)?;
+        self.drive_bridge_round().await?;
+        Ok(multicast_receipt(group_id, receivers, intent))
     }
 
     // Fast path: reuse the cached route if it is still valid.
@@ -240,12 +304,13 @@ where
             .edge(self.local_node_id, next_hop_node_id)
             .map(|edge| edge.observation.value.endpoint.clone())
             .ok_or_else(no_route_candidate)?;
+        let intent = TransportDeliveryIntent::unicast(endpoint);
         self.transport_sender
-            .send_transport(&endpoint, payload)
+            .send_transport_to(&intent, payload)
             .map_err(BleClientError::Transport)?;
         Ok(QueuedTransportCommand {
             next_hop_node_id,
-            endpoint,
+            intent,
         })
     }
 
@@ -485,6 +550,26 @@ impl JacquardBleClient {
         reply_rx.await.map_err(|_| BleClientError::RuntimeStopped)?
     }
 
+    pub async fn send_multicast(
+        &self,
+        group_id: MulticastGroupId,
+        receivers: impl IntoIterator<Item = NodeId>,
+        payload: &[u8],
+    ) -> Result<JacquardBleMulticastReceipt, BleClientError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let payload = encode_client_payload(payload);
+        self.commands
+            .send(ClientCommand::SendMulticast {
+                group_id,
+                receivers: receivers.into_iter().collect(),
+                payload,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| BleClientError::RuntimeStopped)?;
+        reply_rx.await.map_err(|_| BleClientError::RuntimeStopped)?
+    }
+
     #[must_use = "dropping the incoming stream discards client payload events"]
     pub fn incoming(&self) -> impl Stream<Item = (NodeId, Bytes)> {
         BroadcastStream::new(self.incoming.subscribe())
@@ -659,7 +744,22 @@ fn send_receipt(
         destination_node_id,
         route_id,
         next_hop_node_id: queued.next_hop_node_id,
-        endpoint: queued.endpoint,
+        delivery_mode: queued.intent.mode(),
+        endpoint: queued.intent.endpoint().clone(),
+        stage: JacquardBleSendStage::QueuedForTransport,
+    }
+}
+
+fn multicast_receipt(
+    group_id: MulticastGroupId,
+    receivers: Vec<NodeId>,
+    intent: TransportDeliveryIntent,
+) -> JacquardBleMulticastReceipt {
+    JacquardBleMulticastReceipt {
+        group_id,
+        receivers,
+        delivery_mode: intent.mode(),
+        endpoint: intent.endpoint().clone(),
         stage: JacquardBleSendStage::QueuedForTransport,
     }
 }

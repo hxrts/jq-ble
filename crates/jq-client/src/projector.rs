@@ -305,6 +305,7 @@ fn project_observed_route(topology: &MeshTopology, route: &ObservedRoute) -> Opt
         engine: route.engine_id.clone(),
         shape_visibility,
         protocol_mix,
+        delivery_mode: jacquard_core::TransportDeliveryMode::Unicast,
         delivery,
         // Use whichever tick is more recent to capture both health checks and lifecycle transitions.
         observed_at_tick: route

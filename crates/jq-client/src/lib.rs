@@ -19,7 +19,10 @@ pub use bridge::{
     BleBridgeRouter, BleBridgeTickSource, BleBridgeTransport, BleBridgeWaitDecision,
     BleBridgeWaitState, BleHostBridge, MonotonicBleTickSource,
 };
-pub use client::{BleClientError, JacquardBleClient, JacquardBleSendReceipt, JacquardBleSendStage};
+pub use client::{
+    BleClientError, JacquardBleClient, JacquardBleMulticastReceipt, JacquardBleSendReceipt,
+    JacquardBleSendStage,
+};
 pub use effects::BleRuntimeEffects;
 pub use jq_link_profile as link_profile;
 pub use jq_node_profile as node_profile;

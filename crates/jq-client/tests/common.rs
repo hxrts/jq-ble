@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use jacquard_core::{
     ByteCount, Configuration, EndpointLocator, Environment, FactSourceClass, LinkEndpoint, NodeId,
     Observation, OriginAuthenticationClass, RatioPermille, RouteEpoch, RoutingEvidenceClass, Tick,
-    TransportError, TransportIngressEvent, TransportKind,
+    TransportDeliveryIntent, TransportError, TransportIngressEvent, TransportKind,
 };
 use jacquard_host_support::{
     DispatchReceiver, DispatchSender, TransportIngressNotifier, transport_ingress_mailbox,
@@ -29,7 +29,7 @@ const MAILBOX_CAPACITY: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutboundFrame {
-    pub endpoint: LinkEndpoint,
+    pub intent: TransportDeliveryIntent,
     pub payload: Vec<u8>,
 }
 
@@ -45,9 +45,17 @@ impl TransportSenderEffects for TestTransportSender {
         endpoint: &LinkEndpoint,
         payload: &[u8],
     ) -> Result<(), TransportError> {
+        self.send_transport_to(&TransportDeliveryIntent::unicast(endpoint.clone()), payload)
+    }
+
+    fn send_transport_to(
+        &mut self,
+        intent: &TransportDeliveryIntent,
+        payload: &[u8],
+    ) -> Result<(), TransportError> {
         self.outbound
             .send(OutboundFrame {
-                endpoint: endpoint.clone(),
+                intent: intent.clone(),
                 payload: payload.to_vec(),
             })
             .map(|_| ())

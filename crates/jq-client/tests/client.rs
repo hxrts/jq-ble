@@ -8,8 +8,9 @@ mod common;
 use std::time::{Duration, Instant};
 
 use jacquard_core::{
-    LinkBuilder, LinkEndpoint, LinkRuntimeState, NodeId, PartitionRecoveryClass, RepairCapability,
-    TransportIngressEvent, TransportKind,
+    LinkBuilder, LinkEndpoint, LinkRuntimeState, MulticastGroupId, NodeId, PartitionRecoveryClass,
+    RepairCapability, TransportDeliveryIntent, TransportDeliveryMode, TransportIngressEvent,
+    TransportKind,
 };
 use jacquard_host_support::{TransportIngressClass, dispatch_mailbox};
 use jq_client::test_support::{
@@ -78,6 +79,7 @@ async fn send_flushes_a_payload_through_the_client_boundary() {
                 .expect("send through client");
             assert_eq!(receipt.destination_node_id, remote_node_id);
             assert_eq!(receipt.next_hop_node_id, remote_node_id);
+            assert_eq!(receipt.delivery_mode, TransportDeliveryMode::Unicast);
             assert_eq!(receipt.stage, JacquardBleSendStage::QueuedForTransport);
             assert!(
                 started_at.elapsed() < Duration::from_millis(150),
@@ -91,6 +93,59 @@ async fn send_flushes_a_payload_through_the_client_boundary() {
                     .filter_map(|frame| decode_client_payload_for_testing(&frame.payload))
                     .any(|payload| payload == b"hello over jacquard ble")
             );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn send_multicast_flushes_an_admitted_multicast_intent() {
+    LocalSet::new()
+        .run_until(async {
+            let local_node_id = NodeId([1; 32]);
+            let receivers = vec![NodeId([2; 32]), NodeId([3; 32])];
+            let group_id = MulticastGroupId([9; 16]);
+            let (outbound_tx, outbound_rx) = dispatch_mailbox(64);
+            let transport_sender = TestTransportSender {
+                outbound: outbound_tx,
+            };
+            let transport = FakeTransport::new(outbound_rx);
+            let flushed = transport.flushed.clone();
+            let client = JacquardBleClient::new_with_transport_for_testing(
+                local_node_id,
+                published_topology(),
+                transport,
+                transport_sender,
+            );
+
+            let receipt = client
+                .send_multicast(group_id, receivers.clone(), b"hello multicast")
+                .await
+                .expect("send multicast through client");
+
+            assert_eq!(receipt.group_id, group_id);
+            assert_eq!(receipt.receivers, receivers);
+            assert_eq!(receipt.delivery_mode, TransportDeliveryMode::Multicast);
+            assert_eq!(receipt.stage, JacquardBleSendStage::QueuedForTransport);
+
+            let flushed = flushed.lock().expect("flushed frames");
+            let frame = flushed
+                .iter()
+                .find(|frame| {
+                    decode_client_payload_for_testing(&frame.payload).as_deref()
+                        == Some(b"hello multicast".as_slice())
+                })
+                .expect("multicast frame flushed");
+            match &frame.intent {
+                TransportDeliveryIntent::Multicast {
+                    group_id: frame_group,
+                    receivers: frame_receivers,
+                    ..
+                } => {
+                    assert_eq!(*frame_group, group_id);
+                    assert_eq!(*frame_receivers, receipt.receivers);
+                }
+                other => panic!("expected multicast intent, got {other:?}"),
+            }
         })
         .await;
 }

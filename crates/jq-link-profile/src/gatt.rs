@@ -157,6 +157,18 @@ pub fn gatt_endpoint(device_id: &DeviceId) -> LinkEndpoint {
 }
 
 #[must_use]
+pub fn gatt_notify_fanout_endpoint() -> LinkEndpoint {
+    LinkEndpoint::new(
+        TransportKind::BleGatt,
+        EndpointLocator::ScopedBytes {
+            scope: "ble-notify".into(),
+            bytes: JACQUARD_P2C_CHAR_UUID.as_bytes().to_vec(),
+        },
+        ByteCount(512),
+    )
+}
+
+#[must_use]
 pub fn l2cap_endpoint(device_id: &DeviceId) -> LinkEndpoint {
     // L2CAP CoC supports larger frames; 1472 aligns with the reliable.rs MAX_DATAGRAM_SIZE.
     LinkEndpoint::new(

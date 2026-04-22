@@ -14,7 +14,7 @@ use blew::l2cap::{L2capChannel, types::Psm};
 use blew::peripheral::backend::PeripheralBackend;
 use blew::peripheral::{Peripheral, PeripheralEvent};
 use blew::types::DeviceId;
-use jacquard_core::{LinkEndpoint, NodeId, TransportIngressEvent};
+use jacquard_core::{LinkEndpoint, NodeId, TransportDeliveryIntent, TransportIngressEvent};
 use jacquard_host_support::{
     PeerDirectory, PendingClaims, TransportIngressClass, TransportIngressSender, dispatch_mailbox,
     transport_ingress_mailbox,
@@ -496,17 +496,29 @@ where
     }
 
     async fn dispatch_outbound_command(&mut self, command: BleOutboundCommand) {
-        let Some(device_id) = device_id_from_endpoint(&command.endpoint) else {
+        match command.intent {
+            TransportDeliveryIntent::Unicast { endpoint } => {
+                self.dispatch_unicast_command(endpoint, &command.payload)
+                    .await;
+            }
+            TransportDeliveryIntent::Multicast { .. } => {
+                self.dispatch_multicast_command(&command.payload).await;
+            }
+            TransportDeliveryIntent::Broadcast { .. } => {}
+        }
+    }
+
+    async fn dispatch_unicast_command(&mut self, endpoint: LinkEndpoint, payload: &[u8]) {
+        let Some(device_id) = device_id_from_endpoint(&endpoint) else {
             return;
         };
-
         // Loop at most twice: once via the preferred session, once via GATT fallback after an L2CAP downgrade.
         let mut downgraded_l2cap = None;
         loop {
             let Some(session) = self.egress_session_for_device(&device_id) else {
                 return;
             };
-            match self.send_via_session(session, &command.payload).await {
+            match self.send_via_session(session, payload).await {
                 None => return,
                 Some(channel_id) => {
                     // Guard against an infinite loop if we already downgraded this channel once.
@@ -519,6 +531,16 @@ where
                 }
             }
         }
+    }
+
+    async fn dispatch_multicast_command(&mut self, payload: &[u8]) {
+        // GATT notifications are characteristic-wide fanout in `blew`; this path is only reached
+        // after the caller supplies an explicit multicast delivery intent.
+        // allow-ignored-result: notify delivery is fire-and-forget and link health is observed asynchronously
+        let _ = self
+            .peripheral
+            .notify_characteristic(JACQUARD_P2C_CHAR_UUID, payload.to_vec())
+            .await;
     }
 
     /// Attempts to send `payload` via `session`. Returns `Some(channel_id)` if the L2CAP channel

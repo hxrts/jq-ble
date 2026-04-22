@@ -4,6 +4,8 @@
 
 `jacquard` is a mesh-routing system with a synchronous routing core. `blew` is a cross-platform async BLE library that provides central/peripheral roles + GATT and optional L2CAP support. `jq-ble` bridges these two models, letting jacquard observe BLE links, route over them, and expose host-facing APIs around the BLE transport.
 
+Unicast sends use point-to-point BLE paths: L2CAP when available, otherwise central GATT writes. Peripheral GATT notifications are exposed only through explicit multicast fanout intent, and BLE advertising remains discovery/control-plane only.
+
 ## Crates
 
 - `crates/jq-link-profile` - BLE link profile and runtime owner task for `jacquard`
