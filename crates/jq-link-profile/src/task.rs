@@ -501,8 +501,13 @@ where
                 self.dispatch_unicast_command(endpoint, &command.payload)
                     .await;
             }
-            TransportDeliveryIntent::Multicast { .. } => {
-                self.dispatch_multicast_command(&command.payload).await;
+            TransportDeliveryIntent::Multicast {
+                endpoint,
+                receivers,
+                ..
+            } => {
+                self.dispatch_multicast_command(&endpoint, &receivers, &command.payload)
+                    .await;
             }
             TransportDeliveryIntent::Broadcast { .. } => {}
         }
@@ -533,7 +538,17 @@ where
         }
     }
 
-    async fn dispatch_multicast_command(&mut self, payload: &[u8]) {
+    async fn dispatch_multicast_command(
+        &mut self,
+        endpoint: &LinkEndpoint,
+        receivers: &[NodeId],
+        payload: &[u8],
+    ) {
+        if endpoint != &crate::gatt::gatt_notify_fanout_endpoint()
+            || !self.multicast_receivers_have_subscribers(receivers)
+        {
+            return;
+        }
         // GATT notifications are characteristic-wide fanout in `blew`; this path is only reached
         // after the caller supplies an explicit multicast delivery intent.
         // allow-ignored-result: notify delivery is fire-and-forget and link health is observed asynchronously
@@ -541,6 +556,15 @@ where
             .peripheral
             .notify_characteristic(JACQUARD_P2C_CHAR_UUID, payload.to_vec())
             .await;
+    }
+
+    fn multicast_receivers_have_subscribers(&self, receivers: &[NodeId]) -> bool {
+        !receivers.is_empty()
+            && receivers.iter().all(|receiver| {
+                self.sessions
+                    .get(receiver)
+                    .is_some_and(PeerSessions::has_notify_subscriber)
+            })
     }
 
     /// Attempts to send `payload` via `session`. Returns `Some(channel_id)` if the L2CAP channel

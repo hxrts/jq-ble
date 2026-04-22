@@ -13,8 +13,8 @@ use bytes::Bytes;
 use futures_util::SinkExt;
 use jacquard_core::{
     ByteCount, EndpointLocator, LinkEndpoint, LinkRuntimeState, MulticastGroupId, NodeId,
-    TransportDeliveryIntent, TransportDeliveryMode, TransportError, TransportIngressEvent,
-    TransportKind,
+    OrderStamp, TransportDeliveryIntent, TransportDeliveryMode, TransportError,
+    TransportIngressEvent, TransportKind,
 };
 use jacquard_host_support::DispatchReceiver;
 use jacquard_traits::{TransportDriver, TransportSenderEffects};
@@ -22,8 +22,8 @@ use jq_link_profile::{
     BleConfig, BleNotifySubscriber, BleOutboundCommand, BleRuntimeTask, BleSession,
     BleTransportDriver, JACQUARD_C2P_CHAR_UUID, JACQUARD_NODE_ID_CHAR_UUID, JACQUARD_P2C_CHAR_UUID,
     JACQUARD_PSM_CHAR_UUID, PeerSessions, advertised_hint_service, gatt_endpoint,
-    gatt_fallback_service, gatt_l2cap_service, gatt_notify_fanout_endpoint, identity_gatt_service,
-    l2cap_endpoint, parse_psm_value,
+    gatt_fallback_service, gatt_l2cap_service, gatt_notify_multicast_support,
+    identity_gatt_service, l2cap_endpoint, parse_psm_value,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinHandle;
@@ -421,25 +421,42 @@ async fn multicast_intent_dispatches_gatt_notify_fanout() {
     let remote_central: Central<_> = Central::from_backend(remote_central_link.central);
     let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
 
-    let components = BleRuntimeTask::spawn(
+    let (mut task, (_driver, _sender, _outbound, control, _notifier)) = BleRuntimeTask::new(
         local_node_id,
         runtime_central,
         runtime_peripheral,
         BleConfig::default(),
     )
-    .expect("spawn runtime");
-    let (_driver, _sender, _outbound, control, _notifier, runtime_task) = components.into_parts();
+    .expect("build runtime");
+    for receiver in &receivers {
+        task.testing_seed_sessions(
+            *receiver,
+            PeerSessions::gatt_notify_fanout(BleNotifySubscriber {
+                device_id: DeviceId::from("mock-central"),
+            }),
+        );
+    }
+    let runtime_task = tokio::spawn(task.testing_run());
     let mut remote_events = remote_central.events();
     remote_central
         .subscribe_characteristic(&DeviceId::from("mock-peripheral"), JACQUARD_P2C_CHAR_UUID)
         .await
         .expect("subscribe to runtime notifications");
 
+    let group_id = MulticastGroupId([4; 16]);
+    let support = gatt_notify_multicast_support(
+        local_node_id,
+        group_id,
+        receivers.clone(),
+        jacquard_core::Tick(0),
+        OrderStamp(0),
+    )
+    .expect("multicast support");
     control
         .dispatch(vec![BleOutboundCommand {
             intent: TransportDeliveryIntent::Multicast {
-                endpoint: gatt_notify_fanout_endpoint(),
-                group_id: MulticastGroupId([4; 16]),
+                endpoint: support.endpoint().clone(),
+                group_id,
                 receivers,
             },
             payload: b"fanout".to_vec(),
@@ -460,6 +477,70 @@ async fn multicast_intent_dispatches_gatt_notify_fanout() {
                 }
                 Some(_) => {}
                 None => panic!("remote events closed before multicast notification"),
+            },
+        }
+    }
+
+    shutdown_runtime(control, runtime_task).await;
+}
+
+#[tokio::test]
+async fn multicast_intent_without_subscriber_state_does_not_notify() {
+    let local_node_id = NodeId([1; 32]);
+    let receiver = NodeId([6; 32]);
+
+    let (central_link, _remote_peripheral_link) = MockLink::pair();
+    let runtime_central: Central<_> = Central::from_backend(central_link.central);
+    let (remote_central_link, peripheral_link) = MockLink::pair();
+    let remote_central: Central<_> = Central::from_backend(remote_central_link.central);
+    let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
+
+    let components = BleRuntimeTask::spawn(
+        local_node_id,
+        runtime_central,
+        runtime_peripheral,
+        BleConfig::default(),
+    )
+    .expect("spawn runtime");
+    let (_driver, _sender, _outbound, control, _notifier, runtime_task) = components.into_parts();
+    let mut remote_events = remote_central.events();
+    remote_central
+        .subscribe_characteristic(&DeviceId::from("mock-peripheral"), JACQUARD_P2C_CHAR_UUID)
+        .await
+        .expect("subscribe to runtime notifications");
+
+    let group_id = MulticastGroupId([4; 16]);
+    let support = gatt_notify_multicast_support(
+        local_node_id,
+        group_id,
+        [receiver],
+        jacquard_core::Tick(0),
+        OrderStamp(0),
+    )
+    .expect("multicast support");
+    control
+        .dispatch(vec![BleOutboundCommand {
+            intent: TransportDeliveryIntent::Multicast {
+                endpoint: support.endpoint().clone(),
+                group_id,
+                receivers: vec![receiver],
+            },
+            payload: b"no-subscriber-state".to_vec(),
+        }])
+        .await
+        .expect("dispatch outbound batch");
+
+    let deadline = tokio::time::sleep(Duration::from_millis(100));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => break,
+            event = remote_events.next() => match event {
+                Some(CentralEvent::CharacteristicNotification { .. }) => {
+                    panic!("multicast notify requires resolved subscriber fanout state");
+                }
+                Some(_) => {}
+                None => break,
             },
         }
     }

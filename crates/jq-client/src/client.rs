@@ -21,14 +21,12 @@ use jacquard_core::{
     Configuration, DeliveryCompatibilityPolicy, LinkEndpoint, MaterializedRoute, MulticastGroupId,
     NodeId, Observation, RouteAdmissionRejection, RouteDeliveryObjective, RouteError, RouteId,
     RouteSelectionError, RoutingTickHint, Tick, TransportDeliveryIntent, TransportDeliveryMode,
-    TransportDeliverySupport, TransportError, TransportObservation,
+    TransportError, TransportObservation,
 };
 use jacquard_mercator::selected_neighbor_from_backend_route_id;
 use jacquard_router::admitted_delivery_intent;
 use jacquard_traits::{Router, RoutingDataPlane, TransportSenderEffects};
-use jq_link_profile::{
-    BleConfig, BleLinkError, BleTransportComponents, gatt_notify_fanout_endpoint,
-};
+use jq_link_profile::{BleConfig, BleLinkError, BleTransportComponents};
 use jq_node_profile::MeshTopology;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -215,16 +213,18 @@ where
         receivers: Vec<NodeId>,
         payload: &[u8],
     ) -> Result<JacquardBleMulticastReceipt, BleClientError> {
-        let endpoint = gatt_notify_fanout_endpoint();
         let objective = RouteDeliveryObjective::MulticastGroup {
             group_id,
             receivers: receivers.clone(),
         };
-        let support = TransportDeliverySupport::Multicast {
-            endpoint,
+        let support = jq_link_profile::gatt_notify_multicast_support(
+            self.local_node_id,
             group_id,
-            receivers: receivers.clone(),
-        };
+            receivers.clone(),
+            Tick(0),
+            jacquard_core::OrderStamp(0),
+        )
+        .ok_or(RouteAdmissionRejection::DeliveryAssumptionUnsupported)?;
         let intent = admitted_delivery_intent(
             &objective,
             &support,
@@ -550,6 +550,11 @@ impl JacquardBleClient {
         reply_rx.await.map_err(|_| BleClientError::RuntimeStopped)?
     }
 
+    /// Sends one application payload through explicit BLE notification fanout.
+    ///
+    /// This is multicast, not targeted unicast: the admitted receiver set is
+    /// encoded in the Jacquard delivery intent and the BLE runtime only maps it
+    /// to GATT notify when matching subscriber fanout state is known.
     pub async fn send_multicast(
         &self,
         group_id: MulticastGroupId,

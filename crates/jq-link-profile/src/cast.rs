@@ -5,14 +5,16 @@
 //! sync with topology input.
 
 use jacquard_cast_support::{
-    CastDeliveryObjective, CastDeliveryPolicy, CastEvidenceMeta, UnicastDeliverySupport,
-    UnicastObservation, shape_unicast_delivery_support, shape_unicast_evidence,
+    CastCoverageObjective, CastDeliveryObjective, CastDeliveryPolicy, CastEvidenceMeta,
+    CastGroupId, MulticastDeliverySupport, MulticastObservation, ReceiverCoverageObservation,
+    UnicastDeliverySupport, UnicastObservation, shape_multicast_delivery_support,
+    shape_multicast_evidence, shape_unicast_delivery_support, shape_unicast_evidence,
 };
 use jacquard_core::{
-    DurationMs, FactSourceClass, Link, LinkBuilder, LinkEndpoint, LinkRuntimeState, NodeId,
-    Observation, OrderStamp, OriginAuthenticationClass, PartitionRecoveryClass, RatioPermille,
-    RepairCapability, RoutingEvidenceClass, Tick, TransportIngressEvent, TransportKind,
-    TransportObservation,
+    DurationMs, FactSourceClass, Link, LinkBuilder, LinkEndpoint, LinkRuntimeState,
+    MulticastGroupId, NodeId, Observation, OrderStamp, OriginAuthenticationClass,
+    PartitionRecoveryClass, RatioPermille, RepairCapability, RoutingEvidenceClass, Tick,
+    TransportDeliverySupport, TransportIngressEvent, TransportKind, TransportObservation,
 };
 use jacquard_mem_link_profile::SimulatedLinkProfile;
 
@@ -21,6 +23,8 @@ const BLE_LINK_VALID_FOR_MS: DurationMs = DurationMs(30_000);
 // L2CAP is rated higher than GATT because CoC provides flow control and larger frames, which Mercator weighs into selection.
 const BLE_GATT_CONFIDENCE: RatioPermille = RatioPermille(700);
 const BLE_L2CAP_CONFIDENCE: RatioPermille = RatioPermille(900);
+const BLE_NOTIFY_GROUP_PRESSURE: RatioPermille = RatioPermille(100);
+const BLE_NOTIFY_FANOUT_LIMIT: u32 = 8;
 
 #[must_use]
 fn cast_evidence_meta(observed_at_tick: Tick, order: OrderStamp) -> CastEvidenceMeta {
@@ -44,6 +48,69 @@ fn shape_ble_unicast_delivery_support(
     let (evidence, _) = shape_unicast_evidence([observation], policy.evidence);
     let objective = CastDeliveryObjective::unicast(local_node_id, remote_node_id);
     let (support, _) = shape_unicast_delivery_support(evidence.iter(), &objective, policy);
+    support.into_iter().next()
+}
+
+#[must_use]
+pub fn gatt_notify_multicast_support(
+    local_node_id: NodeId,
+    group_id: MulticastGroupId,
+    receivers: impl IntoIterator<Item = NodeId>,
+    observed_at_tick: Tick,
+    order: OrderStamp,
+) -> Option<TransportDeliverySupport> {
+    let receivers = receivers.into_iter().collect::<Vec<_>>();
+    let meta = cast_evidence_meta(observed_at_tick, order);
+    let support = shape_ble_notify_multicast_delivery_support(
+        local_node_id,
+        group_id,
+        receivers.iter().copied(),
+        meta,
+        CastDeliveryPolicy::default(),
+    )?;
+    Some(TransportDeliverySupport::Multicast {
+        endpoint: crate::gatt::gatt_notify_fanout_endpoint(),
+        group_id: support.group_id.to_route_group_id(),
+        receivers: support
+            .receivers
+            .into_iter()
+            .map(|receiver| receiver.receiver)
+            .collect(),
+    })
+}
+
+#[must_use]
+fn shape_ble_notify_multicast_delivery_support(
+    local_node_id: NodeId,
+    group_id: MulticastGroupId,
+    receivers: impl IntoIterator<Item = NodeId>,
+    meta: CastEvidenceMeta,
+    policy: CastDeliveryPolicy,
+) -> Option<MulticastDeliverySupport> {
+    let receivers = receivers.into_iter().collect::<Vec<_>>();
+    let observation = MulticastObservation {
+        sender: local_node_id,
+        group_id: CastGroupId::new(group_id),
+        receivers: receivers
+            .iter()
+            .map(|receiver| ReceiverCoverageObservation {
+                receiver: *receiver,
+                confidence_permille: BLE_GATT_CONFIDENCE,
+            })
+            .collect(),
+        group_pressure_permille: BLE_NOTIFY_GROUP_PRESSURE,
+        fanout_limit: BLE_NOTIFY_FANOUT_LIMIT,
+        payload_bytes_max: crate::gatt::gatt_notify_fanout_endpoint().mtu_bytes,
+        meta,
+    };
+    let (evidence, _) = shape_multicast_evidence([observation], policy.evidence);
+    let objective = CastDeliveryObjective::multicast(
+        local_node_id,
+        CastGroupId::new(group_id),
+        receivers,
+        CastCoverageObjective::AllReceivers,
+    );
+    let (support, _) = shape_multicast_delivery_support(evidence.iter(), &objective, policy);
     support.into_iter().next()
 }
 
@@ -201,7 +268,7 @@ fn link_carrier(endpoint: LinkEndpoint, runtime_state: LinkRuntimeState) -> Link
 #[cfg(test)]
 mod tests {
     use jacquard_cast_support::{CastEvidenceBounds, CastEvidencePolicy};
-    use jacquard_core::{ByteCount, EndpointLocator, TransportKind};
+    use jacquard_core::{ByteCount, EndpointLocator, TransportDeliveryMode, TransportKind};
 
     use super::*;
 
@@ -253,6 +320,35 @@ mod tests {
             assert_eq!(support.payload_bytes_max, ByteCount(mtu));
             assert_eq!(support.confidence_permille, confidence);
             assert_eq!(support.bidirectional_confidence_permille, bidirectional);
+        }
+    }
+
+    #[test]
+    fn notify_subscribers_shape_multicast_support() {
+        let support = gatt_notify_multicast_support(
+            NodeId([1; 32]),
+            MulticastGroupId([8; 16]),
+            [NodeId([2; 32]), NodeId([3; 32])],
+            Tick(9),
+            OrderStamp(10),
+        )
+        .expect("multicast support");
+
+        assert_eq!(support.mode(), TransportDeliveryMode::Multicast);
+        assert_eq!(
+            support.endpoint(),
+            &crate::gatt::gatt_notify_fanout_endpoint()
+        );
+        match support {
+            TransportDeliverySupport::Multicast {
+                group_id,
+                receivers,
+                ..
+            } => {
+                assert_eq!(group_id, MulticastGroupId([8; 16]));
+                assert_eq!(receivers, vec![NodeId([2; 32]), NodeId([3; 32])]);
+            }
+            other => panic!("expected multicast support, got {other:?}"),
         }
     }
 

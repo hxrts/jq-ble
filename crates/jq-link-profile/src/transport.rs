@@ -164,6 +164,11 @@ impl PeerSessions {
         self.notify_subscribers.push(subscriber);
     }
 
+    #[must_use]
+    pub(crate) fn has_notify_subscriber(&self) -> bool {
+        !self.notify_subscribers.is_empty()
+    }
+
     pub(crate) fn install_gatt_central(&mut self, session: BleSession) {
         match &mut self.state {
             PeerSessionState::Disconnected | PeerSessionState::GattOnly { .. } => {
