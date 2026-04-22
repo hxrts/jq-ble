@@ -49,14 +49,14 @@ If you need to inspect or change BLE substrate behavior, look there first.
 
 ## Toolkit
 
-This repo uses [`hxrts/toolkit`](https://github.com/hxrts/toolkit) as a Nix flake input. The toolkit provides:
+This repo uses [`hxrts/toolkit`](https://github.com/hxrts/toolkit) as a pinned Nix flake input. The toolkit provides:
 
 - A pinned nightly rustfmt config (`toolkit-fmt`)
 - Clippy wrapper (`toolkit-clippy`)
 - Dylint lints (`toolkit-dylint`) — currently `trait_purity` is active
 - `toolkit-xtask` for policy checks driven by `toolkit/toolkit.toml`
 
-The active toolkit checks are: `proc_macro_scope`, `docs_semantic_drift`, `crate_root_policy`, `ignored_result`, `unsafe_boundary`, `public_type_width`, `dependency_policy`, `text_formatting`.
+The active toolkit checks are: `proc_macro_scope`, `docs_semantic_drift`, `crate_root_policy`, `ignored_result`, `unsafe_boundary`, `public_type_width`, `dependency_policy`, `text_formatting`, `result_must_use`, `test_boundaries`, `docs_link_check`, `workspace_hygiene`, `bool_param`, `must_use_public_return`, `assert_shape`, `drop_side_effects`, `recursion_guard`, `naming_units`, `limit_constant`, `workflow_actions`.
 
 All checks must appear in both `justfile` (individual targets + `ci-dry-run` steps) and `.github/workflows/policy.yml`. The `scripts/preflight.sh` enforces this parity at the start of every dry run.
 
@@ -66,6 +66,6 @@ Repo-specific lint and enforcement configuration lives in `toolkit/toolkit.toml`
 
 ## Editing Expectations
 
-- Keep changes scoped to the Jacquard BLE profile crates in this repo.
+- Keep changes scoped to the Jacquard adapter crates in this repo.
 - Avoid introducing hidden async ownership into Jacquard-facing APIs.
 - Prefer tests that drive the bridge deterministically rather than depending on ambient timing.

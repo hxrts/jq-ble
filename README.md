@@ -1,6 +1,6 @@
 # jq-ble
 
-`jq-ble` contains adapters that allow the [`jacquard`](https://github.com/hxrts/jacquard) router use Bluetooth Low Energy via [`blew`](https://github.com/mcginty/blew).
+`jq-ble` contains adapters that allow the [`jacquard`](https://github.com/hxrts/jacquard) router to use Bluetooth Low Energy via [`blew`](https://github.com/mcginty/blew).
 
 `jacquard` is a mesh-routing system with a synchronous routing core. `blew` is a cross-platform async BLE library that provides central/peripheral roles + GATT and optional L2CAP support. `jq-ble` bridges these two models, letting jacquard observe BLE links, route over them, and expose host-facing APIs around the BLE transport.
 
@@ -17,11 +17,14 @@
 # Enter nix dev shell
 nix develop
 
-# Build the project 
-cargo build
+# Build the workspace
+cargo build --workspace
 
-# Run e2e test
-cargo test --test stranger_relay -p demo
+# Run all tests
+cargo test --workspace
+
+# Run the full local CI dry run
+just ci-dry-run
 ```
 
 ## License
