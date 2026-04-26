@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "jq-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "jq-link-profile"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blew",
  "bytes",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "jq-node-profile"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "jacquard-core",
  "jacquard-reference-client",
