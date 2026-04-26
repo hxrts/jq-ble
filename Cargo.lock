@@ -206,6 +206,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "cobs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -436,6 +445,18 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "embedded-io"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+
+[[package]]
+name = "embedded-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "equivalent"
@@ -692,48 +713,48 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jacquard-babel"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38aec5ad306e4c0a5b2ff789deda8d999e326c06b11b13ba4ff139875e7fc61b"
+checksum = "95d73d2ab4645a29d7abcad55e71773d4a8271a129fcd8b3254d6258805d31d6"
 dependencies = [
- "bincode",
  "jacquard-core",
  "jacquard-host-support",
  "jacquard-traits",
+ "postcard",
  "serde",
 ]
 
 [[package]]
 name = "jacquard-batman-bellman"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c75854324528941ae328f4bb5fd820ff7b93866ebc5d7bbf76c5c8fc38ef39c0"
+checksum = "0e7427a063fef7c326074378ee04cf33b89e6eef806a36fa62970fc829d10363"
 dependencies = [
- "bincode",
  "jacquard-core",
  "jacquard-host-support",
  "jacquard-traits",
+ "postcard",
  "serde",
 ]
 
 [[package]]
 name = "jacquard-batman-classic"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5466e6e385b2dc6154dfeb99099fab5c0cc7a095683a7098a88449f49ff44537"
+checksum = "465ad1dcf0f95610065ae575e40efc107d7a93c4f3639678fb43019312f06c81"
 dependencies = [
- "bincode",
  "jacquard-core",
  "jacquard-host-support",
  "jacquard-traits",
+ "postcard",
  "serde",
 ]
 
 [[package]]
 name = "jacquard-cast-support"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6b1012622e57010cf9d97747854272d7ddad1164e5fd35a881deb2972674762"
+checksum = "50b2b75a26a4838aab930c7d80fd4fad6b05f6098b889ce51380e086e4551e95"
 dependencies = [
  "jacquard-core",
  "serde",
@@ -741,35 +762,19 @@ dependencies = [
 
 [[package]]
 name = "jacquard-core"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1e717d0f51ce938130fe741ae6069db5ba15929cc667a34bf91d50ef14617aa"
+checksum = "76dc65e01cf38182f6879beb6129ae5e84c433f7d7ccb8d2693f4f47dda8b87b"
 dependencies = [
  "jacquard-macros",
  "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "jacquard-field"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0c1581c87a09e2b591161bf8a9241fa1efa4a8adfd7f5e025bb0f83e8dca2ea"
-dependencies = [
- "bincode",
- "cfg-if",
- "jacquard-core",
- "jacquard-traits",
- "serde",
- "serde_json",
- "telltale-search",
 ]
 
 [[package]]
 name = "jacquard-host-support"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc0a6d66505af121692e19353c632351378c55265de1ac7a66a24593e730b1f8"
+checksum = "f044746adfbed068df32d127a77592fafef43615101c68af862bc9555d33f647"
 dependencies = [
  "cfg-if",
  "jacquard-core",
@@ -779,9 +784,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-macros"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c214e465990b4ae4b44bf3e8b02988b464a87d380071bb0a501386476345e8d"
+checksum = "554cdad29a63affe33ea796110b6cbd28fb4eefcc7ee01421e19a05426815d19"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -791,9 +796,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-mem-link-profile"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5709016e8270d9d545bd5359f79cd8ed21d2760358b33f6d378a1558d0e349a6"
+checksum = "4e9592a1ddbd7b78be2572865641cea7e85116b6a700282f42670d338cc463c9"
 dependencies = [
  "jacquard-cast-support",
  "jacquard-core",
@@ -804,9 +809,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-mem-node-profile"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e73fc39d81a222dcf36462b0c30285c51b83ac8ecbe96c045750186d3861483"
+checksum = "93c5f0484c2756014b6025970cfabd537042b57d4429ce164100fb4bca74667f"
 dependencies = [
  "jacquard-core",
  "jacquard-host-support",
@@ -816,9 +821,9 @@ dependencies = [
 
 [[package]]
 name = "jacquard-mercator"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30aae64b87c2021ee221981b87b7d7a66573445d44ba00f44c0d1e1f997b64f4"
+checksum = "4b1d56b93010f283e810bf0dfcf8534f1945891989ba15fe534d2ad0f00c0a16"
 dependencies = [
  "jacquard-core",
  "jacquard-traits",
@@ -827,27 +832,27 @@ dependencies = [
 
 [[package]]
 name = "jacquard-olsrv2"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7da8a89dec16cb4809ecd3abda6efd682e9ec5b766478385653db5cda8ac74dc"
+checksum = "5db24687c81a65e39c61b4b1457880f6ce1415e3b17a46da00888c01da67e40c"
 dependencies = [
- "bincode",
  "jacquard-core",
  "jacquard-host-support",
  "jacquard-traits",
+ "postcard",
  "serde",
 ]
 
 [[package]]
 name = "jacquard-pathway"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b82c807aebf18e5294feac4ed268227140078d60b4dd99845e56218dbd406d49"
+checksum = "df513db6d3290030319edcd16623215847aa0176a2c97c278c1b0ac49b574f0d"
 dependencies = [
- "bincode",
  "cfg-if",
  "jacquard-core",
  "jacquard-traits",
+ "postcard",
  "serde",
  "serde_json",
  "telltale",
@@ -856,15 +861,14 @@ dependencies = [
 
 [[package]]
 name = "jacquard-reference-client"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53ae6bade78a32ef8c6503a0ba39fca533ecefc5ba7e6674909b525dcdc8b0cf"
+checksum = "abf0e370cda664f15238f6650adf07fda93d714980c1e8b21b69d99e818c261d"
 dependencies = [
  "jacquard-babel",
  "jacquard-batman-bellman",
  "jacquard-batman-classic",
  "jacquard-core",
- "jacquard-field",
  "jacquard-host-support",
  "jacquard-mem-link-profile",
  "jacquard-mem-node-profile",
@@ -879,33 +883,33 @@ dependencies = [
 
 [[package]]
 name = "jacquard-router"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ac0d15c2ee54855ea00e99726d1505290f77ffad155610ebb62b24c20290c3a"
+checksum = "04fc2c42047756ff89dc39a9731f9b401e32bbe51098b711b60ba45167a30067"
 dependencies = [
- "bincode",
  "jacquard-core",
  "jacquard-traits",
+ "postcard",
  "serde",
 ]
 
 [[package]]
 name = "jacquard-scatter"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1447b05f29184926eba4c4615d32241c2e3cd16a7d1e04fdd377a9a7efdd593"
+checksum = "d64645bf8b1cc43c9d13d297e9135ba843ee333b76ee6f18e986d654beb98c35"
 dependencies = [
- "bincode",
  "jacquard-core",
  "jacquard-traits",
+ "postcard",
  "serde",
 ]
 
 [[package]]
 name = "jacquard-testkit"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd4359dac7fc4bffc740fcf5895f5e7adf7ac671a2611933e7bb1d76d2e61c9b"
+checksum = "79b27bdd972d829d9eef80c8e8fde9120e0b4c68cd1b93fec78ea4efc40ca033"
 dependencies = [
  "jacquard-babel",
  "jacquard-batman-bellman",
@@ -921,14 +925,13 @@ dependencies = [
 
 [[package]]
 name = "jacquard-traits"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c98e8ebf865ad02def70e3c9a0dee70960a4119690c1c6b62c826399494fefd8"
+checksum = "9121b90d3b2fdc7c091d19c28587c3ba00fac7e8e1e5e99037c51020b2f754ac"
 dependencies = [
  "blake3",
  "jacquard-core",
  "jacquard-macros",
- "rust-toolkit-effects",
 ]
 
 [[package]]
@@ -1341,6 +1344,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "postcard"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
+dependencies = [
+ "cobs",
+ "embedded-io 0.4.0",
+ "embedded-io 0.6.1",
+ "serde",
+]
+
+[[package]]
 name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1448,16 +1463,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
-name = "rust-toolkit-effects"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcf843a461134b68f6708e8a3c2d4deaac34699566e472b68af2eccfa4c767a5"
-
-[[package]]
 name = "rust-toolkit-trait-contracts"
-version = "0.3.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53d2990a94ebe6233554f8ca670cc6b0d4029091edc742c969154e6c93af663c"
+checksum = "bd32bc789cde0f4e822f08fa0a568af8143076db697005c3debfe7389616fb65"
 dependencies = [
  "proc-macro2",
  "quote",
