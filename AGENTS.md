@@ -39,7 +39,7 @@ The main job of this repo is to bridge those two worlds cleanly:
 
 This repo does not vendor `blew`. The workspace imports `blew` from crates.io:
 
-- `blew = "0.2.3"`
+- `blew = "0.6.2"`
 
 If you need to inspect or change BLE substrate behavior, look there first.
 

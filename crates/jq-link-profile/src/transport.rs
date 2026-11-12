@@ -572,6 +572,7 @@ async fn configured_central(config: &BleConfig) -> Result<(Central, Vec<BleDevic
     let central: Central = if config.restoration.central_restore_identifier.is_some() {
         Central::with_config(CentralConfig {
             restore_identifier: config.restoration.central_restore_identifier.clone(),
+            ..Default::default()
         })
         .await?
     } else {
@@ -590,6 +591,7 @@ async fn configured_peripheral(
     let peripheral: Peripheral = if config.restoration.peripheral_restore_identifier.is_some() {
         Peripheral::with_config(PeripheralConfig {
             restore_identifier: config.restoration.peripheral_restore_identifier.clone(),
+            ..Default::default()
         })
         .await?
     } else {

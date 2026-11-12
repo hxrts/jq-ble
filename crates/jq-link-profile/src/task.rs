@@ -389,7 +389,7 @@ where
         }
         let service = self.startup_gatt_service();
         let config = AdvertisingConfig {
-            local_name: "jq-ble".into(),
+            local_name: blew::peripheral::LocalName::None,
             service_uuids: vec![service.uuid],
         };
         self.startup.advertising = StartupStep::from_start_result(
@@ -486,6 +486,7 @@ where
                 char_uuid,
                 value,
             } => self.handle_characteristic_notification(device_id, char_uuid, value.as_ref()),
+            _ => {}
         }
     }
 
@@ -593,6 +594,7 @@ where
             | DisconnectCause::RemoteClose
             | DisconnectCause::Timeout
             | DisconnectCause::Unknown(_) => {}
+            _ => {}
         }
     }
 
@@ -628,11 +630,14 @@ where
             } if char_uuid == JACQUARD_C2P_CHAR_UUID => {
                 self.handle_c2p_write(client_id, value, responder);
             }
-            PeripheralRequest::Write { responder, .. } => {
-                if let Some(responder) = responder {
-                    responder.error();
-                }
-            }
+            PeripheralRequest::Write {
+                responder: Some(responder),
+                ..
+            } => responder.error(),
+            PeripheralRequest::Write {
+                responder: None, ..
+            } => {}
+            _ => {}
         }
     }
 
@@ -660,6 +665,7 @@ where
                 }
             }
             PeripheralStateEvent::SubscriptionChanged { .. } => {}
+            _ => {}
         }
     }
 

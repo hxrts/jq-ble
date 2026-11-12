@@ -54,6 +54,34 @@ fn l2cap_codec() -> LengthDelimitedCodec {
         .new_codec()
 }
 
+async fn restored_device(services: Vec<GattService>) -> BleDevice {
+    let (central_link, peripheral_link) = MockLink::pair();
+    let central = Central::from_backend(central_link.central);
+    let peripheral = Peripheral::from_backend(peripheral_link.peripheral);
+    for service in services {
+        peripheral.add_service(&service).await.expect("add service");
+    }
+    peripheral
+        .start_advertising(&AdvertisingConfig {
+            local_name: blew::peripheral::LocalName::None,
+            service_uuids: Vec::new(),
+        })
+        .await
+        .expect("start advertising");
+    let mut events = central.events();
+    central
+        .start_scan(Default::default())
+        .await
+        .expect("start scan");
+    loop {
+        if let CentralEvent::DeviceDiscovered(device) =
+            events.next().await.expect("discovery event")
+        {
+            return device;
+        }
+    }
+}
+
 async fn shutdown_runtime(
     control: jq_link_profile::BleDriverControl,
     runtime_task: JoinHandle<()>,
@@ -101,7 +129,7 @@ async fn spawn_mock_runtime(
 
     remote_peripheral
         .start_advertising(&AdvertisingConfig {
-            local_name: "jacquard-peer".into(),
+            local_name: blew::peripheral::LocalName::Temporary("jacquard-peer".into()),
             service_uuids: Vec::new(),
         })
         .await
@@ -300,12 +328,9 @@ async fn restored_central_devices_are_rehydrated_before_scan_startup() {
     let (_remote_central_link, peripheral_link) = MockLink::pair();
     let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
     let restored_state = BleRestoredState {
-        central_devices: vec![BleDevice {
-            id: DeviceId::from("mock-peripheral"),
-            name: Some("restored-peer".into()),
-            rssi: None,
-            services: vec![advertised_hint_service(&remote_node_id).uuid],
-        }],
+        central_devices: vec![
+            restored_device(vec![advertised_hint_service(&remote_node_id)]).await,
+        ],
         peripheral_service_uuids: Vec::new(),
     };
     let components = BleRuntimeTask::spawn_with_restored_state(
@@ -350,12 +375,7 @@ async fn restored_central_devices_without_hints_resolve_identity_directly() {
     let (_remote_central_link, peripheral_link) = MockLink::pair();
     let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
     let restored_state = BleRestoredState {
-        central_devices: vec![BleDevice {
-            id: DeviceId::from("mock-peripheral"),
-            name: Some("restored-peer".into()),
-            rssi: None,
-            services: Vec::new(),
-        }],
+        central_devices: vec![restored_device(Vec::new()).await],
         peripheral_service_uuids: Vec::new(),
     };
     let components = BleRuntimeTask::spawn_with_restored_state(
@@ -392,12 +412,7 @@ async fn restored_central_devices_without_resolvable_identity_are_discarded() {
     let (_remote_central_link, peripheral_link) = MockLink::pair();
     let runtime_peripheral: Peripheral<_> = Peripheral::from_backend(peripheral_link.peripheral);
     let restored_state = BleRestoredState {
-        central_devices: vec![BleDevice {
-            id: DeviceId::from("mock-peripheral"),
-            name: Some("restored-peer".into()),
-            rssi: None,
-            services: Vec::new(),
-        }],
+        central_devices: vec![restored_device(Vec::new()).await],
         peripheral_service_uuids: Vec::new(),
     };
     let components = BleRuntimeTask::spawn_with_restored_state(
@@ -444,7 +459,7 @@ async fn scan_startup_retries_after_central_adapter_powers_on() {
         .expect("add remote identity service");
     remote_peripheral
         .start_advertising(&AdvertisingConfig {
-            local_name: "remote-peer".into(),
+            local_name: blew::peripheral::LocalName::Temporary("remote-peer".into()),
             service_uuids: Vec::new(),
         })
         .await
@@ -527,7 +542,7 @@ async fn sender_queue_does_not_perform_ble_io_until_control_dispatch() {
         .expect("add remote fallback service");
     remote_peripheral
         .start_advertising(&AdvertisingConfig {
-            local_name: "remote-peer".into(),
+            local_name: blew::peripheral::LocalName::Temporary("remote-peer".into()),
             service_uuids: Vec::new(),
         })
         .await
@@ -1010,7 +1025,7 @@ async fn central_opened_l2cap_upgrade_emits_updates_and_carries_framed_payloads(
         .expect("add remote l2cap service");
     remote_peripheral
         .start_advertising(&AdvertisingConfig {
-            local_name: "remote-peer".into(),
+            local_name: blew::peripheral::LocalName::Temporary("remote-peer".into()),
             service_uuids: Vec::new(),
         })
         .await
@@ -1125,7 +1140,7 @@ async fn l2cap_writer_failure_downgrades_to_gatt_fallback() {
         .expect("add remote l2cap service");
     remote_peripheral
         .start_advertising(&AdvertisingConfig {
-            local_name: "remote-peer".into(),
+            local_name: blew::peripheral::LocalName::Temporary("remote-peer".into()),
             service_uuids: Vec::new(),
         })
         .await
@@ -1297,7 +1312,7 @@ async fn control_path_events_are_retried_after_ingress_overflow() {
         .expect("add remote l2cap service");
     remote_peripheral
         .start_advertising(&AdvertisingConfig {
-            local_name: "remote-peer".into(),
+            local_name: blew::peripheral::LocalName::Temporary("remote-peer".into()),
             service_uuids: Vec::new(),
         })
         .await
